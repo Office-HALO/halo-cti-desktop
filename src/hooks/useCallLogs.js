@@ -30,7 +30,7 @@ export function useCallLogs(date) {
     if (phones.length > 0) {
       const { data: custs } = await supabase
         .from('customers')
-        .select('id, phone_normalized, name, rank, tags, blocked')
+        .select('id, phone_normalized, name, rank, tags')
         .in('phone_normalized', phones);
       (custs || []).forEach((c) => {
         customerMap[c.phone_normalized] = c;
@@ -49,6 +49,15 @@ export function useCallLogs(date) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!date) return;
+    const channel = supabase
+      .channel(`call_logs-realtime-${date}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [date, load]);
 
   return { rows, loading, reload: load };
 }

@@ -79,7 +79,7 @@ export default function Customers() {
                 onClick={() => setSelectedId(c.id)}
               >
                 <div className="cl-top">
-                  <span className="cl-name">{c.blocked ? '🚫 ' : ''}{c.name || '名前未登録'}</span>
+                  <span className="cl-name">{c.name || '名前未登録'}</span>
                   {c.rank && c.rank !== 'C' && (
                     <span className={'chip ' + (RANK_CHIP[c.rank] || '')} style={{ height: 16, fontSize: 9, padding: '0 5px' }}>{c.rank}</span>
                   )}
@@ -119,7 +119,6 @@ function CustomerDetail({ c, onSave }) {
     memo: c.memo || '',
     alert_memo: c.alert_memo || '',
     shared_memo: c.shared_memo || '',
-    blocked: c.blocked || false,
   });
 
   const upd = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
@@ -132,7 +131,6 @@ function CustomerDetail({ c, onSave }) {
       memo: form.memo || null,
       alert_memo: form.alert_memo || null,
       shared_memo: form.shared_memo || null,
-      blocked: form.blocked,
     };
     onSave(c.id, patch);
     setEditing(false);
@@ -147,10 +145,6 @@ function CustomerDetail({ c, onSave }) {
           <Icon name="bolt" size={13} /> {c.alert_memo}
         </div>
       )}
-      {c.blocked && (
-        <div className="cd-alert-banner cd-blocked-banner">🚫 出禁・ブロック対象のお客様です</div>
-      )}
-
       <div className="cd-head">
         <div className="cd-head-l">
           <Avatar name={c.name} size={52} hue={245} />
@@ -206,7 +200,6 @@ function CustomerDetail({ c, onSave }) {
                 </select>
               </label>
               <label>タグ（カンマ区切り）<input value={form.tags} onChange={upd('tags')} placeholder="優良, 常連" /></label>
-              <label className="checkbox-row"><input type="checkbox" checked={form.blocked} onChange={upd('blocked')} /> 出禁・ブロック</label>
             </div>
           ) : (
             <div className="kv">
@@ -215,7 +208,6 @@ function CustomerDetail({ c, onSave }) {
               <div><span className="k">ランク</span><span className="v">{c.rank || 'C'}</span></div>
               <div><span className="k">ステータス</span><span className="v">{tags.map((t) => <span key={t} className={'chip ' + (RANK_CHIP[t] || '')}>{t}</span>)}</span></div>
               <div><span className="k">初来店</span><span className="v">{c.first_visit_date || '—'}</span></div>
-              <div><span className="k">出禁</span><span className="v">{c.blocked ? <span className="chip red">出禁</span> : '—'}</span></div>
             </div>
           )}
         </div>

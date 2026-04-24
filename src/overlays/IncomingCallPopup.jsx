@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Icon from '../components/Icon.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { supabase } from '../lib/supabase.js';
+import { startRingtone, stopRingtone } from '../lib/ringtone.js';
 
 const RANK_CHIP = { VIP: 'gold', A: 'green', B: 'blue', NG: 'red', 優良: 'green', CB決済: 'blue' };
 
@@ -27,7 +28,8 @@ export default function IncomingCallPopup({ call, onClose, onOpenCustomer }) {
 
   useEffect(() => {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000);
-    return () => clearInterval(id);
+    startRingtone();
+    return () => { clearInterval(id); stopRingtone(); };
   }, []);
 
   // Load today's reservation + cast nomination history
@@ -99,7 +101,6 @@ export default function IncomingCallPopup({ call, onClose, onOpenCustomer }) {
   const { phone, customer } = call;
   const c = customer;
   const tags = c?.tags || [];
-  const isBlocked = c?.blocked === true;
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const ss = String(elapsed % 60).padStart(2, '0');
 
@@ -137,12 +138,6 @@ export default function IncomingCallPopup({ call, onClose, onOpenCustomer }) {
         {!minimized && (
           <>
             <div className="cp-body">
-              {isBlocked && (
-                <div className="cp-alert" style={{ background: 'oklch(0.94 0.06 25)', color: 'var(--danger)', marginBottom: 10 }}>
-                  <Icon name="bolt" size={12} />
-                  <span><b>出禁・ブロック対象</b>のお客様です</span>
-                </div>
-              )}
               {c?.alert_memo && (
                 <div className="cp-alert warn" style={{ marginBottom: 10 }}>
                   <Icon name="bolt" size={12} />

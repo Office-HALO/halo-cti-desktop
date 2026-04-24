@@ -25,6 +25,8 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   const [loading, setLoading] = useState(true);
   const [editingMemo, setEditingMemo] = useState(false);
   const [memoDraft, setMemoDraft] = useState('');
+  const [showMemoAdd, setShowMemoAdd] = useState(false);
+  const [newMemo, setNewMemo] = useState('');
   const startRef = useRef(null);
 
   useEffect(() => {
@@ -79,6 +81,20 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
     setC((prev) => ({ ...prev, ...(data || { alert_memo: memoDraft }) }));
     setEditingMemo(false);
     showToast('success', 'メモを保存しました');
+  };
+
+  const addMemo = async () => {
+    if (!newMemo.trim()) return;
+    const d = new Date();
+    const dateStr = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+    const entry = `${dateStr} ${newMemo.trim()}`;
+    const updatedMemo = c?.memo ? `${entry}\n${c.memo}` : entry;
+    const { data, error } = await saveCustomer(customerId, { memo: updatedMemo });
+    if (error) { showToast('error', '保存失敗'); return; }
+    setC((prev) => ({ ...prev, ...(data || { memo: updatedMemo }) }));
+    setNewMemo('');
+    setShowMemoAdd(false);
+    showToast('success', 'メモを追加しました');
   };
 
   const tags = c?.tags || [];
@@ -178,9 +194,30 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                       )}
                     </div>
 
-                    {pastMemos.length > 0 && (
-                      <div className="cf-card">
-                        <div className="cf-section-title" style={{ marginBottom: 8 }}>過去メモ</div>
+                    <div className="cf-card">
+                      <div className="cf-card-head">
+                        <span className="cf-section-title">過去メモ</span>
+                        <button className="cf-edit-btn" onClick={() => setShowMemoAdd((v) => !v)} title="メモを追加">
+                          <Icon name="plus" size={12} />
+                        </button>
+                      </div>
+                      {showMemoAdd && (
+                        <div style={{ marginBottom: 10 }}>
+                          <textarea
+                            className="cf-memo-input"
+                            rows={2}
+                            placeholder="会話メモを入力..."
+                            value={newMemo}
+                            onChange={(e) => setNewMemo(e.target.value)}
+                            autoFocus
+                          />
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                            <button className="btn sm primary" onClick={addMemo}>追加</button>
+                            <button className="btn sm" onClick={() => { setShowMemoAdd(false); setNewMemo(''); }}>キャンセル</button>
+                          </div>
+                        </div>
+                      )}
+                      {pastMemos.length > 0 ? (
                         <div className="cf-past-memos">
                           {pastMemos.map((m, i) => (
                             <div key={i} className="cf-past-memo">
@@ -189,8 +226,10 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                             </div>
                           ))}
                         </div>
-                      </div>
-                    )}
+                      ) : !showMemoAdd && (
+                        <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>メモなし</div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Right column */}
@@ -217,9 +256,6 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                           <div><div className="cf-stat-lbl">キャンセル</div><div className="cf-stat-val"><b style={{ color: (c.cancel_count ?? 0) > 2 ? 'var(--danger)' : undefined }}>{c.cancel_count ?? 0}</b>回</div></div>
                         </div>
                       </div>
-                      <button className={'cf-blacklist-btn' + (c.blocked ? ' active' : '')}>
-                        {c.blocked ? 'ブラックリスト解除' : 'ブラックリスト登録'}
-                      </button>
                     </div>
 
                     <div className="cf-card">
@@ -297,7 +333,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
 
             <div className="cf-actions">
               <button className="cf-btn ghost"><Icon name="phoneIn" size={13} />発信</button>
-              <button className="cf-btn ghost"><Icon name="edit" size={13} />メモ追加</button>
+              <button className="cf-btn ghost" onClick={() => setShowMemoAdd(true)}><Icon name="edit" size={13} />メモ追加</button>
               <button className="cf-btn ghost"><Icon name="history" size={13} />履歴フル表示</button>
               <button className="cf-btn ghost" style={{ marginLeft: 'auto' }}>編集</button>
               <button className="cf-btn primary"><Icon name="plus" size={13} />新規予約</button>

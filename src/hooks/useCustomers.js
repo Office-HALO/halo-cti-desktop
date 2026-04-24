@@ -21,6 +21,14 @@ export function useCustomers() {
     if (!allCustomers.length) load();
   }, [allCustomers.length, load]);
 
+  useEffect(() => {
+    const channel = supabase
+      .channel('customers-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [load]);
+
   return { customers: allCustomers, loading, reload: load };
 }
 

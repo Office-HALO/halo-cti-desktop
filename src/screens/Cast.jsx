@@ -31,6 +31,14 @@ export default function Cast() {
     if (!allLadies.length) load();
   }, []);
 
+  useEffect(() => {
+    const channel = supabase
+      .channel('ladies-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ladies' }, load)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
   const filtered = allLadies.filter((l) => {
     if (activeOnly && !l.is_active) return false;
     const kw = q.toLowerCase();

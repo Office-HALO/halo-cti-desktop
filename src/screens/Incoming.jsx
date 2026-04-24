@@ -97,11 +97,10 @@ export default function Incoming() {
             </div>
             {rows.map((r) => {
               const cust = r.customer;
-              const blocked = cust?.blocked;
               return (
                 <div
                   key={r.id}
-                  className={'ht-row' + (blocked ? ' ht-row-blocked' : '')}
+                  className="ht-row"
                   style={{ gridTemplateColumns: COLS }}
                 >
                   <div className="mono">{formatCallTime(r.started_at)}</div>
@@ -112,7 +111,6 @@ export default function Incoming() {
                         {cust.rank && cust.rank !== 'C' && (
                           <span className={'chip ht-rank ' + (cust.rank === 'VIP' ? 'blue' : cust.rank === 'A' ? 'green' : cust.rank === 'NG' ? 'red' : '')}>{cust.rank}</span>
                         )}
-                        {blocked && <span className="chip red">出禁</span>}
                       </>
                     ) : (
                       <span className="ht-cust-new">新規</span>
