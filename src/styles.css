@@ -1184,3 +1184,14 @@ body[data-pattern="C"] .chip { border-radius: 3px; height: 18px; }
   background: oklch(0.50 0.16 240); color: #fff; border-color: transparent;
 }
 .cf-btn.primary:hover { background: oklch(0.45 0.16 240); }
+
+/* ── Updater banner ── */
+.updater-banner {
+  position: fixed; bottom: 16px; right: 16px; z-index: 9999;
+  display: flex; align-items: center; gap: 10px;
+  background: oklch(0.22 0.03 250); color: #fff;
+  padding: 10px 16px; border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.3);
+  font-size: 13px;
+}
+.updater-banner b { color: oklch(0.85 0.12 145); }

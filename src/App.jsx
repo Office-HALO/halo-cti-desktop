@@ -12,6 +12,7 @@ import Cast from './screens/Cast.jsx';
 import Staff from './screens/Staff.jsx';
 import Calendar from './screens/Calendar.jsx';
 import IncomingCallPopup from './overlays/IncomingCallPopup.jsx';
+import Updater from './components/Updater.jsx';
 import CustomerFloat from './overlays/CustomerFloat.jsx';
 import { useRealtimeCalls } from './hooks/useRealtimeCalls.js';
 import { useAuth } from './lib/auth.jsx';
@@ -97,6 +98,7 @@ export default function App() {
         onDemoCall={() => setActiveCall({ callLogId: 'demo', phone: '090-1234-5678', customer: null })}
       />
       <Toast />
+      <Updater />
       {activeCall && (
         <IncomingCallPopup
           call={activeCall}
