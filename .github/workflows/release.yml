@@ -32,6 +32,7 @@ jobs:
         run: npm install
 
       - name: Build Tauri app
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,3 +45,33 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+
+      - name: Generate and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          SIG_FILE="src-tauri/target/release/bundle/macos/HALO CTI.app.tar.gz.sig"
+          if [ ! -f "$SIG_FILE" ]; then
+            echo "Sig file not found at $SIG_FILE; searching..."
+            SIG_FILE=$(find src-tauri/target/release/bundle -name '*.app.tar.gz.sig' | head -1)
+          fi
+          SIG=$(cat "$SIG_FILE")
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/HALO.CTI_aarch64.app.tar.gz"
+          cat > latest.json <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "HALO CTI ${TAG}",
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "${SIG}",
+                "url": "${DOWNLOAD_URL}"
+              }
+            }
+          }
+          EOF
+          cat latest.json
+          gh release upload "${TAG}" latest.json --clobber
