@@ -51,12 +51,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
+          set -x
           VERSION="${TAG#v}"
-          SIG_FILE="src-tauri/target/release/bundle/macos/HALO CTI.app.tar.gz.sig"
-          if [ ! -f "$SIG_FILE" ]; then
-            echo "Sig file not found at $SIG_FILE; searching..."
-            SIG_FILE=$(find src-tauri/target/release/bundle -name '*.app.tar.gz.sig' | head -1)
+          echo "PWD: $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE/src-tauri/target/release/bundle/macos/" || true
+          SIG_FILE=$(find "$GITHUB_WORKSPACE" -name '*.app.tar.gz.sig' 2>/dev/null | head -1)
+          if [ -z "$SIG_FILE" ]; then
+            echo "ERROR: no .app.tar.gz.sig found anywhere in workspace"
+            find "$GITHUB_WORKSPACE" -name '*.sig' 2>/dev/null
+            exit 1
           fi
+          echo "Found sig file: $SIG_FILE"
           SIG=$(cat "$SIG_FILE")
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/HALO.CTI_aarch64.app.tar.gz"
