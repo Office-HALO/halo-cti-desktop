@@ -31,6 +31,13 @@ jobs:
       - name: Install frontend deps
         run: npm install
 
+      - name: Write .env
+        run: |
+          cat > .env <<EOF
+          VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY=${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          EOF
+
       - name: Build Tauri app
         id: tauri
         uses: tauri-apps/tauri-action@v0
