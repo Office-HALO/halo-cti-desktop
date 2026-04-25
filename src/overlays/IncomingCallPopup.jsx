@@ -3,6 +3,7 @@ import Icon from '../components/Icon.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { supabase } from '../lib/supabase.js';
 import { startRingtone, stopRingtone } from '../lib/ringtone.js';
+import NewCustomerModal from './NewCustomerModal.jsx';
 
 const RANK_CHIP = { VIP: 'gold', A: 'green', B: 'blue', NG: 'red', 優良: 'green', CB決済: 'blue' };
 
@@ -24,6 +25,7 @@ export default function IncomingCallPopup({ call, onClose, onOpenCustomer }) {
   const [elapsed, setElapsed] = useState(0);
   const [todayRsv, setTodayRsv] = useState(null);
   const [nominations, setNominations] = useState([]);
+  const [showNewCust, setShowNewCust] = useState(false);
   const startRef = useRef(null);
 
   useEffect(() => {
@@ -214,7 +216,7 @@ export default function IncomingCallPopup({ call, onClose, onOpenCustomer }) {
                   </div>
                   <div className="cp-cust-name" style={{ justifyContent: 'center' }}>新規または未登録</div>
                   <div className="cp-cust-sub mono" style={{ justifyContent: 'center' }}>{phone || '—'}</div>
-                  <button className="btn sm" style={{ marginTop: 10 }}>
+                  <button className="btn sm" style={{ marginTop: 10 }} onClick={() => setShowNewCust(true)}>
                     <Icon name="plus" size={12} />新規顧客として登録
                   </button>
                 </div>
@@ -240,6 +242,13 @@ export default function IncomingCallPopup({ call, onClose, onOpenCustomer }) {
           </>
         )}
       </div>
+      {showNewCust && (
+        <NewCustomerModal
+          initialPhone={phone}
+          onClose={() => setShowNewCust(false)}
+          onCreated={(newC) => onOpenCustomer?.(newC.id, newC.phone_normalized)}
+        />
+      )}
     </>
   );
 }

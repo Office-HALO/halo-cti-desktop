@@ -1195,3 +1195,37 @@ body[data-pattern="C"] .chip { border-radius: 3px; height: 18px; }
   font-size: 13px;
 }
 .updater-banner b { color: oklch(0.85 0.12 145); }
+
+/* New Reservation Modal */
+.nr-modal {
+  position: fixed; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 540px; max-width: 92vw; max-height: 90vh;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.35);
+  display: flex; flex-direction: column;
+  z-index: 2100; overflow: hidden;
+}
+.nr-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.nr-title { font-size: 15px; font-weight: 700; }
+.nr-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.nr-body { padding: 14px 16px; overflow: auto; }
+.nr-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
+}
+.nr-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.nr-field > span { color: var(--muted); font-weight: 600; font-size: 11px; }
+.nr-field input, .nr-field select, .nr-field textarea {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--fg); font-size: 13px; font-family: inherit;
+}
+.nr-field textarea { resize: vertical; min-height: 48px; }
+.nr-full { grid-column: 1 / -1; }
+.nr-actions {
+  display: flex; gap: 8px; padding: 12px 16px;
+  border-top: 1px solid var(--border); background: var(--row-alt);
+}
+

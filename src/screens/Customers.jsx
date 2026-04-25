@@ -5,6 +5,8 @@ import { useCustomers, loadCustomerReservations, saveCustomer } from '../hooks/u
 import { useAppStore } from '../store/state.js';
 import { showToast } from '../lib/toast.js';
 import { formatCallTime } from '../lib/utils.js';
+import NewReservationModal from '../overlays/NewReservationModal.jsx';
+import NewCustomerModal from '../overlays/NewCustomerModal.jsx';
 
 const RANK_CHIP = {
   VIP: 'gold', A: 'green', B: 'blue', C: '', NG: 'red',
@@ -18,6 +20,7 @@ export default function Customers() {
   const [q, setQ] = useState('');
   const [rankFilter, setRankFilter] = useState('');
   const [selectedId, setSelectedId] = useState(null);
+  const [showNewCust, setShowNewCust] = useState(false);
 
   const filtered = customers.filter((c) => {
     const kw = q.toLowerCase();
@@ -54,7 +57,7 @@ export default function Customers() {
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
-          <button className="btn sm primary"><Icon name="plus" size={12} />新規</button>
+          <button className="btn sm primary" onClick={() => setShowNewCust(true)}><Icon name="plus" size={12} />新規</button>
         </div>
         <div className="cust-filters">
           {['', 'VIP', 'A', 'B', 'C', 'NG'].map((r) => (
@@ -105,6 +108,15 @@ export default function Customers() {
           <div style={{ padding: 60, textAlign: 'center', color: 'var(--muted)' }}>顧客を選択してください</div>
         )}
       </div>
+      {showNewCust && (
+        <NewCustomerModal
+          onClose={() => setShowNewCust(false)}
+          onCreated={(newC) => {
+            setAllCustomers([newC, ...allCustomers]);
+            setSelectedId(newC.id);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -112,6 +124,7 @@ export default function Customers() {
 function CustomerDetail({ c, onSave }) {
   const [tab, setTab] = useState('info');
   const [editing, setEditing] = useState(false);
+  const [showNewRsv, setShowNewRsv] = useState(false);
   const [form, setForm] = useState({
     name: c.name || '',
     rank: c.rank || 'C',
@@ -170,9 +183,12 @@ function CustomerDetail({ c, onSave }) {
               保存
             </button>
           )}
-          <button className="btn sm primary"><Icon name="plus" size={12} />新規予約</button>
+          <button className="btn sm primary" onClick={() => setShowNewRsv(true)}><Icon name="plus" size={12} />新規予約</button>
         </div>
       </div>
+      {showNewRsv && (
+        <NewReservationModal customer={c} onClose={() => setShowNewRsv(false)} />
+      )}
 
       <div className="cd-stats">
         <div className="stat"><div className="stat-lbl">利用回数</div><div className="stat-val mono">{c.total_visits ?? 0}<span className="u">回</span></div></div>

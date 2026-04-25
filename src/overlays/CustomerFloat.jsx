@@ -3,6 +3,7 @@ import Icon from '../components/Icon.jsx';
 import { supabase } from '../lib/supabase.js';
 import { saveCustomer, loadCustomerReservations } from '../hooks/useCustomers.js';
 import { showToast } from '../lib/toast.js';
+import NewReservationModal from './NewReservationModal.jsx';
 
 const RANK_CHIP = { VIP: 'gold', A: 'green', B: 'blue', NG: 'red', 優良: 'green', CB決済: 'blue' };
 
@@ -27,6 +28,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   const [memoDraft, setMemoDraft] = useState('');
   const [showMemoAdd, setShowMemoAdd] = useState(false);
   const [newMemo, setNewMemo] = useState('');
+  const [showNewRsv, setShowNewRsv] = useState(false);
   const startRef = useRef(null);
 
   useEffect(() => {
@@ -336,11 +338,21 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
               <button className="cf-btn ghost" onClick={() => setShowMemoAdd(true)}><Icon name="edit" size={13} />メモ追加</button>
               <button className="cf-btn ghost"><Icon name="history" size={13} />履歴フル表示</button>
               <button className="cf-btn ghost" style={{ marginLeft: 'auto' }}>編集</button>
-              <button className="cf-btn primary"><Icon name="plus" size={13} />新規予約</button>
+              <button className="cf-btn primary" onClick={() => setShowNewRsv(true)}><Icon name="plus" size={13} />新規予約</button>
             </div>
           </>
         )}
       </div>
+      {showNewRsv && c && (
+        <NewReservationModal
+          customer={c}
+          onClose={() => setShowNewRsv(false)}
+          onCreated={async () => {
+            const rows = await loadCustomerReservations(customerId);
+            setHistory(rows);
+          }}
+        />
+      )}
     </>
   );
 }
