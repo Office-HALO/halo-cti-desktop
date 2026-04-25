@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import SideNav from './components/SideNav.jsx';
 import TopBar from './components/TopBar.jsx';
-import ToolsFloat from './components/ToolsFloat.jsx';
 import Toast from './components/Toast.jsx';
 import Placeholder from './screens/Placeholder.jsx';
 import Login from './screens/Login.jsx';
@@ -107,13 +106,6 @@ export default function App() {
           <Placeholder title={SCREEN_TITLES[current]} />
         )}
       </main>
-      <ToolsFloat
-        density={density}
-        setDensity={setDensity}
-        pattern={pattern}
-        setPattern={setPattern}
-        onDemoCall={() => setActiveCall({ callLogId: 'demo', phone: '090-1234-5678', customer: null })}
-      />
       <Toast />
       <Updater />
       {activeCall && (
