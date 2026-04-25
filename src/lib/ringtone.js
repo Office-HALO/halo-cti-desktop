@@ -32,6 +32,8 @@ function playRing() {
 export function startRingtone() {
   if (timer) return;
   try {
+    const enabled = localStorage.getItem('halo.cti.ringtoneEnabled');
+    if (enabled === 'false') return;
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     playRing();
     timer = setInterval(playRing, 3000);

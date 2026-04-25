@@ -18,6 +18,7 @@ export default function Cast() {
   const [q, setQ] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
   const [selected, setSelected] = useState(null);
+  const [showNew, setShowNew] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -62,7 +63,7 @@ export default function Cast() {
         <button className="btn sm ghost" onClick={load} style={{ marginLeft: 'auto' }}>
           <Icon name="refresh" size={12} />更新
         </button>
-        <button className="btn sm primary"><Icon name="plus" size={12} />新規登録</button>
+        <button className="btn sm primary" onClick={() => setShowNew(true)}><Icon name="plus" size={12} />新規登録</button>
       </div>
 
       {loading ? (
@@ -81,6 +82,9 @@ export default function Cast() {
 
       {selected && (
         <LadyModal lady={selected} onClose={() => setSelected(null)} />
+      )}
+      {showNew && (
+        <LadyModal lady={null} onClose={() => setShowNew(false)} />
       )}
     </div>
   );
@@ -120,34 +124,143 @@ function CastCard({ lady, onClick }) {
 }
 
 function LadyModal({ lady, onClose }) {
-  const p = lady.profile || {};
-  const name = lady.display_name || lady.name || '—';
-  const hue = hashHue(name);
+  const isNew = !lady?.id;
+  const initial = lady || {};
+  const initialP = initial.profile || {};
+  const [name, setName] = useState(initial.name || '');
+  const [displayName, setDisplayName] = useState(initial.display_name || '');
+  const [storeCode, setStoreCode] = useState(initial.store_code || '');
+  const [isActive, setIsActive] = useState(isNew ? true : !!initial.is_active);
+  const [duo, setDuo] = useState(initialP.duo === true ? 'yes' : initialP.duo === false ? 'no' : '');
+  const [tattoo, setTattoo] = useState(!!initialP.tattoo);
+  const [ngAreas, setNgAreas] = useState((initialP.ng_areas || []).join('、'));
+  const [tagsStr, setTagsStr] = useState((initialP.tags || []).join(', '));
+  const [memo, setMemo] = useState(initialP.memo || '');
+  const [loading, setLoading] = useState(false);
+  const [confirmRetire, setConfirmRetire] = useState(false);
+
+  const hue = hashHue(displayName || name || '?');
 
   const handleBackdrop = (e) => { if (e.target === e.currentTarget) onClose(); };
 
+  const save = async () => {
+    if (!displayName.trim() && !name.trim()) {
+      showToast('error', '源氏名または本名を入力してください');
+      return;
+    }
+    setLoading(true);
+    const profile = {
+      ...initialP,
+      duo: duo === 'yes' ? true : duo === 'no' ? false : null,
+      tattoo,
+      ng_areas: ngAreas.split(/[、,\s]+/).map((s) => s.trim()).filter(Boolean),
+      tags: tagsStr.split(',').map((s) => s.trim()).filter(Boolean),
+      memo: memo.trim() || null,
+    };
+    const payload = {
+      name: name.trim() || null,
+      display_name: displayName.trim() || null,
+      store_code: storeCode.trim() || null,
+      is_active: isActive,
+      profile,
+    };
+    let resp;
+    if (isNew) {
+      resp = await supabase.from('ladies').insert(payload).select().single();
+    } else {
+      resp = await supabase.from('ladies').update(payload).eq('id', lady.id).select().single();
+    }
+    setLoading(false);
+    if (resp.error) { showToast('error', '保存失敗: ' + resp.error.message); return; }
+    showToast('success', isNew ? 'キャストを登録しました' : '更新しました');
+    onClose();
+  };
+
+  const retire = async () => {
+    if (!confirmRetire) { setConfirmRetire(true); return; }
+    setLoading(true);
+    const { error } = await supabase.from('ladies').update({ is_active: false }).eq('id', lady.id);
+    setLoading(false);
+    if (error) { showToast('error', '退職処理失敗: ' + error.message); return; }
+    showToast('success', '退職処理しました');
+    onClose();
+  };
+
   return (
     <div className="modal-overlay" onClick={handleBackdrop}>
-      <div className="modal-panel">
-        <div className="modal-head">
+      <div className="nr-modal" style={{ position: 'relative', transform: 'none' }}>
+        <div className="nr-head">
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <Avatar name={name} size={44} hue={hue} />
+            <Avatar name={displayName || name || '?'} size={44} hue={hue} />
             <div>
-              <div style={{ fontWeight: 700, fontSize: 16 }}>{name}</div>
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>{(lady.store_code || '').toUpperCase()} · {lady.is_active ? '在籍' : '退職'}</div>
+              <div className="nr-title">{isNew ? '新規キャスト登録' : (displayName || name || 'キャスト編集')}</div>
+              <div className="nr-subtitle">{isNew ? '基本情報を入力' : (isActive ? '在籍中' : '退職済')}</div>
             </div>
           </div>
-          <button className="btn sm ghost icon" onClick={onClose}><Icon name="close" size={14} /></button>
+          <button className="cp-icon-btn" onClick={onClose}><Icon name="close" size={14} /></button>
         </div>
-        <div className="kv" style={{ padding: '0 16px 16px' }}>
-          <div><span className="k">本名</span><span className="v">{lady.name || '—'}</span></div>
-          <div><span className="k">店舗コード</span><span className="v mono">{lady.store_code || '—'}</span></div>
-          {p.ng_areas?.length > 0 && (
-            <div><span className="k">NGエリア</span><span className="v">{p.ng_areas.join('、')}</span></div>
+
+        <div className="nr-body">
+          <div className="nr-grid">
+            <label className="nr-field">
+              <span>源氏名</span>
+              <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="例: 桐谷 奈々美" />
+            </label>
+            <label className="nr-field">
+              <span>本名</span>
+              <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label className="nr-field">
+              <span>店舗コード</span>
+              <input type="text" value={storeCode} onChange={(e) => setStoreCode(e.target.value)} placeholder="例: shinsaibashi" />
+            </label>
+            <label className="nr-field">
+              <span>在籍状況</span>
+              <select value={isActive ? '1' : '0'} onChange={(e) => setIsActive(e.target.value === '1')}>
+                <option value="1">在籍中</option>
+                <option value="0">退職</option>
+              </select>
+            </label>
+            <label className="nr-field">
+              <span>DUO</span>
+              <select value={duo} onChange={(e) => setDuo(e.target.value)}>
+                <option value="">未設定</option>
+                <option value="yes">可</option>
+                <option value="no">不可</option>
+              </select>
+            </label>
+            <label className="nr-field">
+              <span>タトゥー</span>
+              <select value={tattoo ? '1' : '0'} onChange={(e) => setTattoo(e.target.value === '1')}>
+                <option value="0">なし</option>
+                <option value="1">あり</option>
+              </select>
+            </label>
+            <label className="nr-field nr-full">
+              <span>NGエリア(読点 or カンマ区切り)</span>
+              <input type="text" value={ngAreas} onChange={(e) => setNgAreas(e.target.value)} placeholder="例: 心斎橋、難波" />
+            </label>
+            <label className="nr-field nr-full">
+              <span>タグ(カンマ区切り)</span>
+              <input type="text" value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="例: 人気, 新人" />
+            </label>
+            <label className="nr-field nr-full">
+              <span>メモ</span>
+              <textarea rows={3} value={memo} onChange={(e) => setMemo(e.target.value)} />
+            </label>
+          </div>
+        </div>
+
+        <div className="nr-actions">
+          {!isNew && isActive && (
+            <button className="cf-btn danger-outline" onClick={retire} disabled={loading}>
+              {confirmRetire ? '本当に退職処理する' : '退職処理'}
+            </button>
           )}
-          {p.memo && <div><span className="k">メモ</span><span className="v">{p.memo}</span></div>}
-          <div><span className="k">DUO</span><span className="v">{p.duo === true ? '可' : p.duo === false ? '不可' : '未設定'}</span></div>
-          {p.tattoo && <div><span className="k">タトゥー</span><span className="v">あり</span></div>}
+          <button className="cf-btn ghost" onClick={onClose} disabled={loading}>キャンセル</button>
+          <button className="cf-btn primary" onClick={save} disabled={loading} style={{ marginLeft: 'auto' }}>
+            <Icon name="check" size={13} />{loading ? '保存中...' : (isNew ? '登録' : '更新')}
+          </button>
         </div>
       </div>
     </div>

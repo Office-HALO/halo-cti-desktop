@@ -7,6 +7,7 @@ const TABS = [
   { id: 'cast', label: '在籍女性', icon: 'star' },
   { id: 'calendar', label: '月次カレンダー', icon: 'calendar' },
   { id: 'staff', label: 'シフト管理', icon: 'user' },
+  { id: 'approvals', label: '承認管理', icon: 'check' },
   { id: 'reports', label: 'レポート', icon: 'chart' },
 ];
 

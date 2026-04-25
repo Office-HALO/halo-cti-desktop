@@ -3,7 +3,7 @@ import Icon from '../components/Icon.jsx';
 import { supabase } from '../lib/supabase.js';
 import { saveCustomer, loadCustomerReservations } from '../hooks/useCustomers.js';
 import { showToast } from '../lib/toast.js';
-import NewReservationModal from './NewReservationModal.jsx';
+import ReservationFormModal from './ReservationFormModal.jsx';
 
 const RANK_CHIP = { VIP: 'gold', A: 'green', B: 'blue', NG: 'red', 優良: 'green', CB決済: 'blue' };
 
@@ -29,6 +29,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   const [showMemoAdd, setShowMemoAdd] = useState(false);
   const [newMemo, setNewMemo] = useState('');
   const [showNewRsv, setShowNewRsv] = useState(false);
+  const [editRsv, setEditRsv] = useState(null);
   const startRef = useRef(null);
 
   useEffect(() => {
@@ -311,7 +312,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                         </thead>
                         <tbody>
                           {history.map((r) => (
-                            <tr key={r.id}>
+                            <tr key={r.id} onClick={() => setEditRsv(r)} style={{ cursor: 'pointer' }} title="クリックで編集">
                               <td className="mono">{r.reserved_date} {r.start_time?.slice(0, 5)}</td>
                               <td className="mono">{r.end_time?.slice(0, 5) || '—'}</td>
                               <td>{r.operator || '—'}</td>
@@ -344,10 +345,25 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
         )}
       </div>
       {showNewRsv && c && (
-        <NewReservationModal
+        <ReservationFormModal
           customer={c}
           onClose={() => setShowNewRsv(false)}
-          onCreated={async () => {
+          onSaved={async () => {
+            const rows = await loadCustomerReservations(customerId);
+            setHistory(rows);
+          }}
+        />
+      )}
+      {editRsv && (
+        <ReservationFormModal
+          customer={c}
+          reservation={editRsv}
+          onClose={() => setEditRsv(null)}
+          onSaved={async () => {
+            const rows = await loadCustomerReservations(customerId);
+            setHistory(rows);
+          }}
+          onDeleted={async () => {
             const rows = await loadCustomerReservations(customerId);
             setHistory(rows);
           }}

@@ -9,8 +9,11 @@ import Schedule from './screens/Schedule.jsx';
 import Incoming from './screens/Incoming.jsx';
 import Customers from './screens/Customers.jsx';
 import Cast from './screens/Cast.jsx';
-import Staff from './screens/Staff.jsx';
+import ShiftEdit from './screens/ShiftEdit.jsx';
+import Approvals from './screens/Approvals.jsx';
 import Calendar from './screens/Calendar.jsx';
+import Reports from './screens/Reports.jsx';
+import Settings from './screens/Settings.jsx';
 import IncomingCallPopup from './overlays/IncomingCallPopup.jsx';
 import Updater from './components/Updater.jsx';
 import CustomerFloat from './overlays/CustomerFloat.jsx';
@@ -25,7 +28,9 @@ const SCREEN_TITLES = {
   cast: '在籍女性',
   calendar: '月次カレンダー',
   staff: 'シフト管理',
+  approvals: '承認管理',
   reports: 'レポート',
+  settings: '設定',
 };
 
 export default function App() {
@@ -67,7 +72,7 @@ export default function App() {
 
   return (
     <div className={'app pattern-' + pattern}>
-      <SideNav />
+      <SideNav onNavigate={setCurrent} onOpenSettings={() => setCurrent('settings')} />
       <TopBar
         current={current}
         onNavigate={setCurrent}
@@ -85,7 +90,13 @@ export default function App() {
         ) : current === 'calendar' ? (
           <Calendar />
         ) : current === 'staff' ? (
-          <Staff />
+          <ShiftEdit />
+        ) : current === 'approvals' ? (
+          <Approvals />
+        ) : current === 'reports' ? (
+          <Reports />
+        ) : current === 'settings' ? (
+          <Settings density={density} setDensity={setDensity} pattern={pattern} setPattern={setPattern} />
         ) : (
           <Placeholder title={SCREEN_TITLES[current]} />
         )}

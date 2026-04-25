@@ -7,6 +7,7 @@ import { showToast } from '../lib/toast.js';
 import { formatCallTime } from '../lib/utils.js';
 import NewReservationModal from '../overlays/NewReservationModal.jsx';
 import NewCustomerModal from '../overlays/NewCustomerModal.jsx';
+import { exportRowsAsCsv } from '../lib/csv.js';
 
 const RANK_CHIP = {
   VIP: 'gold', A: 'green', B: 'blue', C: '', NG: 'red',
@@ -57,6 +58,25 @@ export default function Customers() {
               onChange={(e) => setQ(e.target.value)}
             />
           </div>
+          <button className="btn sm ghost" title="CSV出力" onClick={() => {
+            exportRowsAsCsv(
+              `customers_${new Date().toISOString().slice(0, 10)}.csv`,
+              filtered,
+              [
+                { label: '名前', key: 'name' },
+                { label: '電話', key: 'phone_normalized' },
+                { label: '会員番号', key: 'member_no' },
+                { label: 'ランク', key: 'rank' },
+                { label: 'タグ', value: (c) => (c.tags || []).join('|') },
+                { label: '利用回数', key: 'total_visits' },
+                { label: '総額', key: 'total_spent' },
+                { label: '最終来店', key: 'last_visit_date' },
+                { label: '初回', key: 'first_visit_date' },
+                { label: 'メモ', key: 'memo' },
+                { label: '要注意メモ', key: 'alert_memo' },
+              ]
+            );
+          }}><Icon name="download" size={12} />CSV</button>
           <button className="btn sm primary" onClick={() => setShowNewCust(true)}><Icon name="plus" size={12} />新規</button>
         </div>
         <div className="cust-filters">

@@ -33,6 +33,7 @@ const P = {
   download: <><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></>,
   mic:      <><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></>,
   mute:     <><path d="M15 6.5V5a3 3 0 0 0-6 0v7"/><path d="M5 11a7 7 0 0 0 10.5 6"/><path d="M12 18v3M3 3l18 18"/></>,
+  trash:    <><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></>,
 };
 
 export default function Icon({ name, size = 16, stroke = 1.6, style }) {

@@ -4,6 +4,8 @@ import Avatar from '../components/Avatar.jsx';
 import { useAppStore } from '../store/state.js';
 import { useShifts } from '../hooks/useShifts.js';
 import { localDateStr, formatDateJP } from '../lib/utils.js';
+import { supabase } from '../lib/supabase.js';
+import ReservationFormModal from '../overlays/ReservationFormModal.jsx';
 
 const HOUR_START = 9;
 const HOUR_END = 23;
@@ -37,6 +39,17 @@ export default function Schedule({ density = 'compact' }) {
   const setTodayDate = useAppStore((s) => s.setTodayDate);
   const { cast, bookings, loading } = useShifts(todayDate);
   const [hover, setHover] = useState(null);
+  const [editRsv, setEditRsv] = useState(null);
+
+  const openBooking = async (id) => {
+    const { data, error } = await supabase
+      .from('reservations')
+      .select('*, customers(*)')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) return;
+    setEditRsv(data);
+  };
 
   const pxPerMin = PX_PER_MIN_BY_DENSITY[density] || PX_PER_MIN_BY_DENSITY.standard;
   const totalMin = (HOUR_END - HOUR_START) * 60;
@@ -158,6 +171,7 @@ export default function Schedule({ density = 'compact' }) {
                           onEnter={() => setHover(b.id)}
                           onLeave={() => setHover(null)}
                           hovered={hover === b.id}
+                          onClick={() => openBooking(b.id)}
                         />
                       ))}
                   </div>
@@ -183,6 +197,13 @@ export default function Schedule({ density = 'compact' }) {
           )}
         </div>
       </div>
+      {editRsv && (
+        <ReservationFormModal
+          customer={editRsv.customers}
+          reservation={editRsv}
+          onClose={() => setEditRsv(null)}
+        />
+      )}
     </div>
   );
 }
@@ -227,7 +248,7 @@ function ShiftBand({ cast, pxPerMin }) {
   );
 }
 
-function BookingBlock({ b, pxPerMin, onEnter, onLeave, hovered }) {
+function BookingBlock({ b, pxPerMin, onEnter, onLeave, hovered, onClick }) {
   const s = toMin(b.start) - HOUR_START * 60;
   const e = toMin(b.end) - HOUR_START * 60;
   const w = (e - s) * pxPerMin;
@@ -238,6 +259,7 @@ function BookingBlock({ b, pxPerMin, onEnter, onLeave, hovered }) {
       className="book-block"
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
+      onClick={onClick}
       style={{
         left: s * pxPerMin,
         width: w,
@@ -245,6 +267,7 @@ function BookingBlock({ b, pxPerMin, onEnter, onLeave, hovered }) {
         borderLeft: `3px solid ${st.line}`,
         color: st.fg,
         zIndex: hovered ? 5 : 2,
+        cursor: 'pointer',
       }}
     >
       <div className="bb-head">
