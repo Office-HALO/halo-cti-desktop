@@ -100,6 +100,8 @@ export default function CastRanksSettings() {
         onDelete={del}
         onMoveUp={(idx) => swap(idx, idx - 1)}
         onMoveDown={(idx) => swap(idx, idx + 1)}
+        onAdd={openNew}
+        addLabel="+ ランクを追加"
       />
 
       {modal && (

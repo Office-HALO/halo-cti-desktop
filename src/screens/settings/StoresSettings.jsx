@@ -89,6 +89,8 @@ export default function StoresSettings() {
         onDelete={del}
         onMoveUp={(idx) => swap(idx, idx - 1)}
         onMoveDown={(idx) => swap(idx, idx + 1)}
+        onAdd={openNew}
+        addLabel="+ 店舗を追加"
       />
 
       {modal && (
