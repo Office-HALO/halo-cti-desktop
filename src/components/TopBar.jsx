@@ -1,4 +1,5 @@
 import Icon from './Icon.jsx';
+import { useAppStore } from '../store/state.js';
 
 const TABS = [
   { id: 'schedule', label: '本日スケジュール', icon: 'calendar' },
@@ -12,6 +13,10 @@ const TABS = [
 ];
 
 export default function TopBar({ current, onNavigate, dateStr, operator = '岡田' }) {
+  const stores = useAppStore((s) => s.stores);
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
+  const setCurrentStoreId = useAppStore((s) => s.setCurrentStoreId);
+
   const today =
     dateStr ||
     new Date().toLocaleDateString('ja-JP', {
@@ -40,6 +45,19 @@ export default function TopBar({ current, onNavigate, dateStr, operator = '岡�
         <span className="date">{today}</span>
       </div>
       <div className="spacer" />
+      {stores.length > 1 && (
+        <select
+          value={currentStoreId || ''}
+          onChange={(e) => setCurrentStoreId(e.target.value)}
+          style={{
+            padding: '4px 8px', borderRadius: 6,
+            border: '1px solid var(--border)', fontSize: 12,
+            background: 'var(--surface)',
+          }}
+        >
+          {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      )}
       <div className="status-live">
         <span className="dot" />
         回線アクティブ · 3

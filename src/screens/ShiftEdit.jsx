@@ -16,6 +16,7 @@ const hashHue = (s) => {
 export default function ShiftEdit() {
   const todayDate = useAppStore((s) => s.todayDate);
   const setTodayDate = useAppStore((s) => s.setTodayDate);
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
   const [date, setDate] = useState(todayDate || localDateStr());
   const [shifts, setShifts] = useState([]);
   const [ladies, setLadies] = useState([]);
@@ -26,22 +27,25 @@ export default function ShiftEdit() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: s }, { data: l }] = await Promise.all([
-      supabase
-        .from('shifts')
-        .select('*, ladies(display_name, name)')
-        .eq('shift_date', date)
-        .order('start_time'),
-      supabase
-        .from('ladies')
-        .select('id, display_name, name, is_active')
-        .eq('is_active', true)
-        .order('display_name'),
-    ]);
+    let shiftsQ = supabase
+      .from('shifts')
+      .select('*, ladies!inner(display_name, name, store_id)')
+      .eq('shift_date', date)
+      .order('start_time');
+    if (currentStoreId) shiftsQ = shiftsQ.eq('ladies.store_id', currentStoreId);
+
+    let ladiesQ = supabase
+      .from('ladies')
+      .select('id, display_name, name, is_active')
+      .eq('is_active', true)
+      .order('display_name');
+    if (currentStoreId) ladiesQ = ladiesQ.eq('store_id', currentStoreId);
+
+    const [{ data: s }, { data: l }] = await Promise.all([shiftsQ, ladiesQ]);
     setShifts(s || []);
     setLadies(l || []);
     setLoading(false);
-  }, [date]);
+  }, [date, currentStoreId]);
 
   useEffect(() => { load(); }, [load]);
 

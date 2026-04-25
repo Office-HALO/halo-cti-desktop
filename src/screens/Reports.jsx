@@ -3,6 +3,7 @@ import Icon from '../components/Icon.jsx';
 import Avatar from '../components/Avatar.jsx';
 import { supabase } from '../lib/supabase.js';
 import { exportRowsAsCsv } from '../lib/csv.js';
+import { useAppStore } from '../store/state.js';
 
 const hashHue = (s) => {
   let h = 0;
@@ -46,6 +47,7 @@ function presetRange(key) {
 }
 
 export default function Reports() {
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
   const [preset, setPreset] = useState('this_month');
   const [{ from, to }, setRange] = useState(presetRange('this_month'));
   const [rsv, setRsv] = useState([]);
@@ -56,12 +58,15 @@ export default function Reports() {
     let cancelled = false;
     (async () => {
       setLoading(true);
+      let rsvQ = supabase
+        .from('reservations')
+        .select('id, status, amount, lady_id, customer_id, reserved_date, ladies(display_name, name)')
+        .gte('reserved_date', from)
+        .lte('reserved_date', to);
+      if (currentStoreId) rsvQ = rsvQ.eq('store_id', currentStoreId);
+
       const [{ data: rData }, { data: cData }] = await Promise.all([
-        supabase
-          .from('reservations')
-          .select('id, status, amount, lady_id, customer_id, reserved_date, ladies(display_name, name)')
-          .gte('reserved_date', from)
-          .lte('reserved_date', to),
+        rsvQ,
         supabase
           .from('call_logs')
           .select('id, started_at, from_number')
@@ -74,7 +79,7 @@ export default function Reports() {
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [from, to]);
+  }, [from, to, currentStoreId]);
 
   const stats = useMemo(() => {
     const completed = rsv.filter((r) => r.status === 'complete' || r.status === 'visited');

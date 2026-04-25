@@ -37,7 +37,8 @@ const toMin = (t) => {
 export default function Schedule({ density = 'compact' }) {
   const todayDate = useAppStore((s) => s.todayDate);
   const setTodayDate = useAppStore((s) => s.setTodayDate);
-  const { cast, bookings, loading } = useShifts(todayDate);
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
+  const { cast, bookings, loading } = useShifts(todayDate, currentStoreId);
   const [hover, setHover] = useState(null);
   const [editRsv, setEditRsv] = useState(null);
 

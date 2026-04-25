@@ -18,18 +18,22 @@ export default function Staff() {
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
 
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
+
   const load = useCallback(async () => {
     setLoading(true);
     const today = new Date().toISOString().slice(0, 10);
-    const { data, error } = await supabase
+    let q = supabase
       .from('shift_requests')
-      .select('*, ladies(name, display_name, store_code), staff:reviewed_by(name)')
+      .select('*, ladies!inner(name, display_name, store_code, store_id), staff:reviewed_by(name)')
       .gte('shift_date', today)
       .order('shift_date', { ascending: true });
+    if (currentStoreId) q = q.eq('ladies.store_id', currentStoreId);
+    const { data, error } = await q;
     if (error) { showToast('error', 'データ読み込み失敗'); }
     else setAllRequests(data || []);
     setLoading(false);
-  }, [setAllRequests]);
+  }, [setAllRequests, currentStoreId]);
 
   useEffect(() => { load(); }, [load]);
 

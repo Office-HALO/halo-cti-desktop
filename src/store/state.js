@@ -43,4 +43,14 @@ export const useAppStore = create((set) => ({
 
   calViewMode: 'full',
   calHalfOffset: 0,
+
+  currentStoreId: localStorage.getItem('halo.cti.currentStoreId') || null,
+  setCurrentStoreId: (id) => {
+    if (id) localStorage.setItem('halo.cti.currentStoreId', id);
+    else localStorage.removeItem('halo.cti.currentStoreId');
+    set({ currentStoreId: id });
+  },
+
+  stores: [],
+  setStores: (rows) => set({ stores: rows }),
 }));

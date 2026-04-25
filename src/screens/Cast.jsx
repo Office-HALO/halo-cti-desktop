@@ -5,6 +5,12 @@ import { supabase } from '../lib/supabase.js';
 import { useAppStore } from '../store/state.js';
 import { showToast } from '../lib/toast.js';
 
+const INP = {
+  padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6,
+  background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit',
+  outline: 'none', width: '100%', boxSizing: 'border-box',
+};
+
 const hashHue = (s) => {
   let h = 0;
   for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
@@ -14,6 +20,7 @@ const hashHue = (s) => {
 export default function Cast() {
   const allLadies = useAppStore((s) => s.allLadies);
   const setAllLadies = useAppStore((s) => s.setAllLadies);
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
   const [loading, setLoading] = useState(!allLadies.length);
   const [q, setQ] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
@@ -22,8 +29,7 @@ export default function Cast() {
 
   const load = async () => {
     setLoading(true);
-    let query = supabase.from('ladies').select('*').order('display_name');
-    const { data } = await query;
+    const { data } = await supabase.from('ladies').select('*').order('display_name');
     if (data) setAllLadies(data);
     setLoading(false);
   };
@@ -41,6 +47,7 @@ export default function Cast() {
   }, []);
 
   const filtered = allLadies.filter((l) => {
+    if (currentStoreId && l.store_id && l.store_id !== currentStoreId) return false;
     if (activeOnly && !l.is_active) return false;
     const kw = q.toLowerCase();
     if (kw && !((l.display_name || l.name || '').toLowerCase().includes(kw))) return false;
@@ -91,9 +98,11 @@ export default function Cast() {
 }
 
 function CastCard({ lady, onClick }) {
+  const stores = useAppStore((s) => s.stores);
   const name = lady.display_name || lady.name || '—';
   const p = lady.profile || {};
   const hue = hashHue(name);
+  const storeName = stores.find((s) => s.id === lady.store_id)?.name || lady.store_code || '';
   const tags = [];
   if (p.duo === true) tags.push({ label: 'DUO可', cls: 'green' });
   if (p.duo === false) tags.push({ label: 'DUO不可', cls: 'red' });
@@ -111,7 +120,7 @@ function CastCard({ lady, onClick }) {
       </div>
       <div className="cast-card-body">
         <div className="cast-card-name">{name}</div>
-        <div className="cast-card-store">{(lady.store_code || '').toUpperCase()}</div>
+        <div className="cast-card-store">{storeName}</div>
         <div className="cast-card-tags">
           {tags.slice(0, 3).map((t, i) => (
             <span key={i} className={'chip ' + t.cls} style={{ height: 16, padding: '0 5px', fontSize: 9 }}>{t.label}</span>
@@ -124,12 +133,15 @@ function CastCard({ lady, onClick }) {
 }
 
 function LadyModal({ lady, onClose }) {
+  const stores = useAppStore((s) => s.stores);
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
   const isNew = !lady?.id;
   const initial = lady || {};
   const initialP = initial.profile || {};
   const [name, setName] = useState(initial.name || '');
   const [displayName, setDisplayName] = useState(initial.display_name || '');
-  const [storeCode, setStoreCode] = useState(initial.store_code || '');
+  const [storeId, setStoreId] = useState(initial.store_id || currentStoreId || '');
+  const [castRankId, setCastRankId] = useState(initial.cast_rank_id || '');
   const [isActive, setIsActive] = useState(isNew ? true : !!initial.is_active);
   const [duo, setDuo] = useState(initialP.duo === true ? 'yes' : initialP.duo === false ? 'no' : '');
   const [tattoo, setTattoo] = useState(!!initialP.tattoo);
@@ -138,8 +150,15 @@ function LadyModal({ lady, onClose }) {
   const [memo, setMemo] = useState(initialP.memo || '');
   const [loading, setLoading] = useState(false);
   const [confirmRetire, setConfirmRetire] = useState(false);
+  const [ranks, setRanks] = useState([]);
 
   const hue = hashHue(displayName || name || '?');
+
+  useEffect(() => {
+    if (!storeId) { setRanks([]); return; }
+    supabase.from('cast_ranks').select('*').eq('store_id', storeId).order('display_order')
+      .then(({ data }) => setRanks(data || []));
+  }, [storeId]);
 
   const handleBackdrop = (e) => { if (e.target === e.currentTarget) onClose(); };
 
@@ -157,10 +176,13 @@ function LadyModal({ lady, onClose }) {
       tags: tagsStr.split(',').map((s) => s.trim()).filter(Boolean),
       memo: memo.trim() || null,
     };
+    const selectedStore = stores.find((s) => s.id === storeId);
     const payload = {
       name: name.trim() || null,
       display_name: displayName.trim() || null,
-      store_code: storeCode.trim() || null,
+      store_id: storeId || null,
+      store_code: selectedStore?.code || null,
+      cast_rank_id: castRankId || null,
       is_active: isActive,
       profile,
     };
@@ -211,8 +233,18 @@ function LadyModal({ lady, onClose }) {
               <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
             </label>
             <label className="nr-field">
-              <span>店舗コード</span>
-              <input type="text" value={storeCode} onChange={(e) => setStoreCode(e.target.value)} placeholder="例: shinsaibashi" />
+              <span>店舗</span>
+              <select value={storeId} onChange={(e) => { setStoreId(e.target.value); setCastRankId(''); }}>
+                <option value="">— 未設定 —</option>
+                {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </label>
+            <label className="nr-field">
+              <span>キャストランク</span>
+              <select value={castRankId} onChange={(e) => setCastRankId(e.target.value)} disabled={!storeId}>
+                <option value="">— 未設定 —</option>
+                {ranks.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
             </label>
             <label className="nr-field">
               <span>在籍状況</span>

@@ -19,6 +19,8 @@ import Updater from './components/Updater.jsx';
 import CustomerFloat from './overlays/CustomerFloat.jsx';
 import { useRealtimeCalls } from './hooks/useRealtimeCalls.js';
 import { useAuth } from './lib/auth.jsx';
+import { useStoresBoot } from './lib/stores.js';
+import { useAppStore } from './store/state.js';
 import './styles.css';
 
 const SCREEN_TITLES = {
@@ -35,11 +37,15 @@ const SCREEN_TITLES = {
 
 export default function App() {
   const { session, staff, loading } = useAuth();
+  const setCurrentStaff = useAppStore((s) => s.setCurrentStaff);
   const [current, setCurrent] = useState('schedule');
   const [density, setDensity] = useState('compact');
   const [pattern, setPattern] = useState('C');
   const [activeCall, setActiveCall] = useState(null);
   const [floatCustomer, setFloatCustomer] = useState(null);
+
+  useEffect(() => { if (staff) setCurrentStaff(staff); }, [staff?.id]);
+  useStoresBoot();
 
   const handleIncoming = useCallback((call) => setActiveCall(call), []);
   useRealtimeCalls(handleIncoming);

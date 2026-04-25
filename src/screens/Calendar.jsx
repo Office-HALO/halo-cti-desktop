@@ -134,6 +134,7 @@ export default function Calendar() {
   const setAllLadies = useAppStore((s) => s.setAllLadies);
   const calHalfOffset = useAppStore((s) => s.calHalfOffset);
   const calViewMode = useAppStore((s) => s.calViewMode);
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
 
   const [viewMode, setViewMode] = useState(calViewMode || 'full');
   const [halfOffset, setHalfOffset] = useState(calHalfOffset || 0);
@@ -146,16 +147,11 @@ export default function Calendar() {
   const load = useCallback(async (year, month, mode, offset) => {
     setLoading(true);
 
-    let ladies = allLadies;
-    if (!ladies.length) {
-      const { data } = await supabase
-        .from('ladies')
-        .select('id,display_name,name')
-        .eq('is_active', true)
-        .order('display_name');
-      ladies = data || [];
-      setAllLadies(ladies);
-    }
+    let ladiesQ = supabase.from('ladies').select('id,display_name,name').eq('is_active', true).order('display_name');
+    if (currentStoreId) ladiesQ = ladiesQ.eq('store_id', currentStoreId);
+    const { data: freshLadies } = await ladiesQ;
+    const ladies = freshLadies || [];
+    setAllLadies(ladies);
 
     let firstDate, lastDate, lbl;
     if (mode === 'half') {
@@ -173,13 +169,16 @@ export default function Calendar() {
     }
     setLabel(lbl);
 
-    const [{ data: shiftData }, { data: rsvData }] = await Promise.all([
-      supabase.from('shifts').select('lady_id,shift_date,start_time,end_time,end_type')
-        .gte('shift_date', firstDate).lte('shift_date', lastDate),
-      supabase.from('reservations').select('lady_id,reserved_date,status,customers(name),start_time,end_time,course')
-        .gte('reserved_date', firstDate).lte('reserved_date', lastDate)
-        .in('status', ['reserved', 'visited']),
-    ]);
+    let shiftQ = supabase.from('shifts').select('lady_id,shift_date,start_time,end_time,end_type,ladies!inner(store_id)')
+      .gte('shift_date', firstDate).lte('shift_date', lastDate);
+    if (currentStoreId) shiftQ = shiftQ.eq('ladies.store_id', currentStoreId);
+
+    let rsvQ = supabase.from('reservations').select('lady_id,reserved_date,status,customers(name),start_time,end_time,course')
+      .gte('reserved_date', firstDate).lte('reserved_date', lastDate)
+      .in('status', ['reserved', 'visited']);
+    if (currentStoreId) rsvQ = rsvQ.eq('store_id', currentStoreId);
+
+    const [{ data: shiftData }, { data: rsvData }] = await Promise.all([shiftQ, rsvQ]);
 
     const shiftMap = {};
     (shiftData || []).forEach((s) => {
@@ -201,11 +200,11 @@ export default function Calendar() {
 
     setGridHtml(buildGridHtml(ladies, shiftMap, rsvMap, dates, localDateStr()));
     setLoading(false);
-  }, [allLadies, setAllLadies]);
+  }, [setAllLadies, currentStoreId]);
 
   useEffect(() => {
     load(calYear, calMonth, viewMode, halfOffset);
-  }, [calYear, calMonth, viewMode, halfOffset]);
+  }, [calYear, calMonth, viewMode, halfOffset, currentStoreId]);
 
   // delegate click on grid
   useEffect(() => {

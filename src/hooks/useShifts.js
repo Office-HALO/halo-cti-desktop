@@ -15,19 +15,23 @@ const mapRsvStatus = (s) => {
   return s || 'reserved';
 };
 
-async function fetchShiftsData(date) {
-  const { data: shifts, error: e1 } = await supabase
+async function fetchShiftsData(date, storeId) {
+  let shiftsQ = supabase
     .from('shifts')
-    .select('*, ladies(display_name, name, store_code)')
+    .select('*, ladies!inner(display_name, name, store_code, store_id)')
     .eq('shift_date', date)
     .order('start_time');
+  if (storeId) shiftsQ = shiftsQ.eq('ladies.store_id', storeId);
+  const { data: shifts, error: e1 } = await shiftsQ;
   if (e1) throw e1;
 
-  const { data: rsv, error: e2 } = await supabase
+  let rsvQ = supabase
     .from('reservations')
     .select('id, lady_id, start_time, end_time, status, customers(name)')
     .eq('reserved_date', date)
     .in('status', ['reserved', 'visited']);
+  if (storeId) rsvQ = rsvQ.eq('store_id', storeId);
+  const { data: rsv, error: e2 } = await rsvQ;
   if (e2) throw e2;
 
   const castRows = (shifts || []).map((s) => {
@@ -69,7 +73,7 @@ async function fetchShiftsData(date) {
   return { castRows, bookingRows };
 }
 
-export function useShifts(date) {
+export function useShifts(date, storeId) {
   const [cast, setCast] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,7 +85,7 @@ export function useShifts(date) {
     setLoading(true);
     setError(null);
 
-    fetchShiftsData(date)
+    fetchShiftsData(date, storeId)
       .then(({ castRows, bookingRows }) => {
         if (cancelled) return;
         setCast(castRows);
@@ -94,9 +98,8 @@ export function useShifts(date) {
         setLoading(false);
       });
 
-    // Realtime: re-fetch on any shifts or reservations change for this date
     const reload = () => {
-      fetchShiftsData(date)
+      fetchShiftsData(date, storeId)
         .then(({ castRows, bookingRows }) => {
           if (cancelled) return;
           setCast(castRows);
@@ -106,7 +109,7 @@ export function useShifts(date) {
     };
 
     const channel = supabase
-      .channel(`shifts-realtime-${date}`)
+      .channel(`shifts-realtime-${date}-${storeId || 'all'}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'shifts' }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reservations' }, reload)
       .subscribe();
@@ -115,7 +118,7 @@ export function useShifts(date) {
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [date]);
+  }, [date, storeId]);
 
   return { cast, bookings, loading, error };
 }
