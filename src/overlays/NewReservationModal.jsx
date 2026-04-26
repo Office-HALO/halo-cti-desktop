@@ -1,12 +1,16 @@
-import ReservationFormModal from './ReservationFormModal.jsx';
+import { useEffect } from 'react';
+import { openReservationWindow } from '../lib/reservationWindowBridge.js';
 
-// Backwards-compatible thin wrapper for create-only usage.
+// Opens a native OS window for reservation entry.
 export default function NewReservationModal({ customer, onClose, onCreated }) {
-  return (
-    <ReservationFormModal
-      customer={customer}
-      onClose={onClose}
-      onSaved={onCreated}
-    />
-  );
+  useEffect(() => {
+    openReservationWindow({ customer, onSaved: onCreated }).then((win) => {
+      if (!win) {
+        // Tauri not available — fallback handled by caller
+      }
+    });
+    onClose?.();
+  }, []);
+
+  return null;
 }

@@ -44,7 +44,7 @@ function fmtDate(s) {
   return d;
 }
 
-export default function ReservationFormModal({ customer, reservation, onClose, onSaved, onDeleted }) {
+export default function ReservationFormModal({ customer, reservation, onClose, onSaved, onDeleted, standalone = false }) {
   const isEdit = !!reservation?.id;
   const cust = customer || reservation?.customer || null;
   const currentStoreId = useAppStore((s) => s.currentStoreId);
@@ -367,9 +367,11 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   };
 
   // ── Position style ────────────────────────────────────────────────────
-  const posStyle = pos.x !== null
-    ? { left: pos.x + 'px', top: pos.y + 'px', right: 'auto' }
-    : {};
+  const posStyle = standalone
+    ? { position: 'relative', width: '100%', height: '100vh', borderRadius: 0, top: 'auto', right: 'auto', maxHeight: '100vh' }
+    : pos.x !== null
+      ? { left: pos.x + 'px', top: pos.y + 'px', right: 'auto' }
+      : {};
 
   const displayedLadies = onShiftOnly
     ? ladies.filter((l) => l.is_on_shift !== false)
@@ -394,7 +396,7 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
 
   return (
     <>
-      <div className="modal-overlay" style={{ background: 'transparent' }} onClick={onClose} />
+      {!standalone && <div className="modal-overlay" style={{ background: 'transparent' }} onClick={onClose} />}
       <div ref={rootRef} className="fw-root" style={posStyle}>
 
         {/* ── Head ── */}

@@ -5,7 +5,7 @@ import { useAppStore } from '../store/state.js';
 import { useShifts } from '../hooks/useShifts.js';
 import { localDateStr, formatDateJP } from '../lib/utils.js';
 import { supabase } from '../lib/supabase.js';
-import ReservationFormModal from '../overlays/ReservationFormModal.jsx';
+import { openReservationWindow } from '../lib/reservationWindowBridge.js';
 
 const HOUR_START = 9;
 const HOUR_END = 23;
@@ -40,8 +40,6 @@ export default function Schedule({ density = 'compact' }) {
   const currentStoreId = useAppStore((s) => s.currentStoreId);
   const { cast, bookings, loading } = useShifts(todayDate, currentStoreId);
   const [hover, setHover] = useState(null);
-  const [editRsv, setEditRsv] = useState(null);
-
   const openBooking = async (id) => {
     const { data, error } = await supabase
       .from('reservations')
@@ -49,7 +47,7 @@ export default function Schedule({ density = 'compact' }) {
       .eq('id', id)
       .maybeSingle();
     if (error || !data) return;
-    setEditRsv(data);
+    openReservationWindow({ customer: data.customers, reservation: data });
   };
 
   const pxPerMin = PX_PER_MIN_BY_DENSITY[density] || PX_PER_MIN_BY_DENSITY.standard;
@@ -198,13 +196,6 @@ export default function Schedule({ density = 'compact' }) {
           )}
         </div>
       </div>
-      {editRsv && (
-        <ReservationFormModal
-          customer={editRsv.customers}
-          reservation={editRsv}
-          onClose={() => setEditRsv(null)}
-        />
-      )}
     </div>
   );
 }
