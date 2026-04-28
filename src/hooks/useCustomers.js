@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { useAppStore } from '../store/state.js';
+import { normalizePhone } from '../lib/utils.js';
 
 export function useCustomers() {
   const allCustomers = useAppStore((s) => s.allCustomers);
@@ -39,6 +40,24 @@ export async function loadCustomerReservations(customerId) {
     .eq('customer_id', customerId)
     .order('reserved_date', { ascending: false })
     .limit(50);
+  return data || [];
+}
+
+// phone_normalized (+819037...) から末尾10桁でilike検索 → from_number フォーマットを問わず一致
+export async function loadCustomerCallLogs(rawPhone, limit = 10) {
+  if (!rawPhone) return [];
+  const phone = normalizePhone(rawPhone);
+  if (!phone) return [];
+  const digits = phone.replace(/\D/g, ''); // +を除いた数字のみ (例: 819037217943)
+
+  // eq で + が URL エンコードされない問題を回避 → like で数字部分だけマッチ
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select('*')
+    .like('from_number', `%${digits}`)
+    .order('started_at', { ascending: false })
+    .limit(limit);
+  if (error) console.error('[loadCustomerCallLogs]', error.message);
   return data || [];
 }
 

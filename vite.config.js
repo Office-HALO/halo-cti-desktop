@@ -22,7 +22,13 @@ export default defineConfig(async () => ({
           host,
           port: 1421,
         }
-      : undefined,
+      : {
+          // Prevent the main window from reloading when the reservation
+          // sub-window (also connected to this dev server) is closed.
+          // High timeout = don't reload just because one window briefly disconnects.
+          timeout: 120000,
+          overlay: false,
+        },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Icon from '../components/Icon.jsx';
 import { supabase } from '../lib/supabase.js';
-import { saveCustomer, loadCustomerReservations } from '../hooks/useCustomers.js';
+import { saveCustomer, loadCustomerReservations, loadCustomerCallLogs } from '../hooks/useCustomers.js';
+import { formatCallTime } from '../lib/utils.js';
 import { showToast } from '../lib/toast.js';
 import { openReservationWindow } from '../lib/reservationWindowBridge.js';
 
@@ -23,6 +24,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   const [minimized, setMinimized] = useState(false);
   const [c, setC] = useState(null);
   const [history, setHistory] = useState([]);
+  const [callLogs, setCallLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingMemo, setEditingMemo] = useState(false);
   const [memoDraft, setMemoDraft] = useState('');
@@ -38,13 +40,28 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
       if (cancelled) return;
       setC(data || null);
       setMemoDraft(data?.shared_memo || data?.alert_memo || '');
-      const rows = await loadCustomerReservations(customerId);
+      const [rows, logs] = await Promise.all([
+        loadCustomerReservations(customerId),
+        loadCustomerCallLogs(data?.phone_normalized || phone, 10),
+      ]);
       if (cancelled) return;
       setHistory(rows);
+      setCallLogs(logs);
       setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [customerId]);
+
+  // call_logs のリアルタイム更新
+  useEffect(() => {
+    const ch = supabase
+      .channel(`call_logs_float_${customerId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, () => {
+        loadCustomerCallLogs(phone, 10).then(setCallLogs);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [customerId, phone]);
 
   const onDragStart = useCallback((e) => {
     if (e.target.closest('button')) return;
@@ -150,54 +167,50 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
             {!loading && !c && <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>顧客情報が取得できませんでした</div>}
             {!loading && c && (
               <div className="cf-body">
+                {/* 上段: 顧客データ ｜ 顧客メモ */}
                 <div className="cf-grid">
-                  {/* Left column */}
                   <div className="cf-col">
                     <div className="cf-card">
                       <div className="cf-card-head">
-                        <Icon name="phoneIn" size={14} />
-                        <span className="cf-phone mono">{c.phone_normalized || phone}</span>
+                        <Icon name="users" size={13} />
+                        <span className="cf-section-title">顧客データ</span>
                         <button className="cf-edit-btn"><Icon name="edit" size={12} /></button>
                       </div>
-                      <div className="cf-sub-meta">
-                        <span>{todayDateStr()}</span>
-                        <span>{todayTimeStr()}</span>
-                      </div>
-                      <div className="cf-sub-meta">
-                        <span>店舗 <b>{c.store_name || '—'}</b></span>
-                        <span>種別 <b>{c.last_source || '予約'}</b></span>
-                      </div>
-                    </div>
-
-                    <div className={'cf-card cf-alert-card' + (editingMemo ? ' editing' : '')}>
-                      <div className="cf-card-head">
-                        <Icon name="bolt" size={13} />
-                        <span className="cf-section-title">要注意 / 共有メモ</span>
-                        <button className="cf-edit-btn" onClick={() => setEditingMemo((v) => !v)}>
-                          <Icon name="edit" size={12} />
-                        </button>
-                      </div>
-                      {editingMemo ? (
-                        <>
-                          <textarea
-                            className="cf-memo-input"
-                            rows={6}
-                            value={memoDraft}
-                            onChange={(e) => setMemoDraft(e.target.value)}
-                          />
-                          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                            <button className="btn sm primary" onClick={saveMemo}>保存</button>
-                            <button className="btn sm" onClick={() => { setEditingMemo(false); setMemoDraft(c.alert_memo || c.shared_memo || ''); }}>キャンセル</button>
+                      <div className="cf-customer-box">
+                        <div className="cf-cust-name-big">{c.name || '名前未登録'}</div>
+                        <div className="cf-cust-id-row">
+                          <span>会員／{c.member_no || '—'}</span>
+                        </div>
+                        <div className="cf-cust-phone-row">
+                          <Icon name="phoneIn" size={12} />
+                          <span className="mono">{c.phone_normalized || phone}</span>
+                        </div>
+                        <div className="cf-sub-meta" style={{ marginTop: 4 }}>
+                          <span>店舗 <b>{c.store_name || '—'}</b></span>
+                          <span>種別 <b>{c.last_source || '予約'}</b></span>
+                        </div>
+                        <div className="cf-stat-grid">
+                          <div><div className="cf-stat-lbl">利用</div><div className="cf-stat-val"><b>{c.total_visits ?? 0}</b>回</div></div>
+                          <div><div className="cf-stat-lbl">総額</div><div className="cf-stat-val mono">¥{(c.total_spent ?? 0).toLocaleString()}</div></div>
+                          <div><div className="cf-stat-lbl">客単価</div><div className="cf-stat-val mono">¥{avg.toLocaleString()}</div></div>
+                          <div><div className="cf-stat-lbl">キャンセル</div><div className="cf-stat-val"><b style={{ color: (c.cancel_count ?? 0) > 2 ? 'var(--danger)' : undefined }}>{c.cancel_count ?? 0}</b>回</div></div>
+                        </div>
+                        {tags.length > 0 && (
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8 }}>
+                            {tags.map((t) => (
+                              <span key={t} className={'chip ' + (RANK_CHIP[t] || 'blue')}>{t}</span>
+                            ))}
                           </div>
-                        </>
-                      ) : (
-                        <p className="cf-alert-text">{c.alert_memo || c.shared_memo || 'メモなし'}</p>
-                      )}
+                        )}
+                      </div>
                     </div>
+                  </div>
 
-                    <div className="cf-card">
+                  <div className="cf-col">
+                    <div className={'cf-card' + (editingMemo ? ' editing' : '')} style={{ flex: 1 }}>
                       <div className="cf-card-head">
-                        <span className="cf-section-title">過去メモ</span>
+                        <Icon name="edit" size={13} />
+                        <span className="cf-section-title">顧客メモ</span>
                         <button className="cf-edit-btn" onClick={() => setShowMemoAdd((v) => !v)} title="メモを追加">
                           <Icon name="plus" size={12} />
                         </button>
@@ -232,52 +245,67 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                       )}
                     </div>
                   </div>
+                </div>
 
-                  {/* Right column */}
+                {/* 下段: 着信履歴 ｜ 女子への連絡事項 + 要注意事項 */}
+                <div className="cf-grid" style={{ marginTop: 8 }}>
                   <div className="cf-col">
-                    <div className="cf-card">
+                    <div className="cf-card" style={{ flex: 1 }}>
                       <div className="cf-card-head">
-                        <Icon name="users" size={13} />
-                        <span className="cf-section-title">顧客データ</span>
-                        <button className="cf-edit-btn"><Icon name="edit" size={12} /></button>
+                        <Icon name="phoneIn" size={13} />
+                        <span className="cf-section-title">着信履歴</span>
                       </div>
-                      <div className="cf-customer-box">
-                        <div className="cf-cust-name-big">{c.name || '名前未登録'}</div>
-                        <div className="cf-cust-id-row">
-                          <span>会員／{c.member_no || '—'}</span>
+                      {callLogs.length === 0 ? (
+                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>着信記録なし</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {callLogs.map((r) => (
+                            <div key={r.id} style={{ display: 'flex', gap: 8, fontSize: 11, alignItems: 'center' }}>
+                              <span className="mono" style={{ color: 'var(--muted)', flexShrink: 0 }}>{formatCallTime(r.started_at)}</span>
+                              {r.duration != null && (
+                                <span style={{ color: 'var(--muted)', flexShrink: 0 }}>{r.duration}秒</span>
+                              )}
+                            </div>
+                          ))}
                         </div>
-                        <div className="cf-cust-phone-row">
-                          <Icon name="phoneIn" size={12} />
-                          <span className="mono">{c.phone_normalized || phone}</span>
-                        </div>
-                        <div className="cf-stat-grid">
-                          <div><div className="cf-stat-lbl">利用</div><div className="cf-stat-val"><b>{c.total_visits ?? 0}</b>回</div></div>
-                          <div><div className="cf-stat-lbl">総額</div><div className="cf-stat-val mono">¥{(c.total_spent ?? 0).toLocaleString()}</div></div>
-                          <div><div className="cf-stat-lbl">客単価</div><div className="cf-stat-val mono">¥{avg.toLocaleString()}</div></div>
-                          <div><div className="cf-stat-lbl">キャンセル</div><div className="cf-stat-val"><b style={{ color: (c.cancel_count ?? 0) > 2 ? 'var(--danger)' : undefined }}>{c.cancel_count ?? 0}</b>回</div></div>
-                        </div>
-                      </div>
+                      )}
                     </div>
+                  </div>
 
-                    <div className="cf-card">
+                  <div className="cf-col" style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
+                    <div className="cf-card" style={{ flex: 1 }}>
                       <div className="cf-card-head">
                         <Icon name="bolt" size={13} />
                         <span className="cf-section-title">女子への連絡事項</span>
                         <button className="cf-edit-btn"><Icon name="edit" size={12} /></button>
                       </div>
-                      <p className="cf-lady-memo">{c.lady_memo || c.memo || 'なし'}</p>
+                      <p className="cf-lady-memo">{c.shared_memo || c.lady_memo || 'なし'}</p>
                     </div>
-
-                    {tags.length > 0 && (
-                      <div className="cf-card">
-                        <div className="cf-section-title" style={{ marginBottom: 6 }}>タグ</div>
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                          {tags.map((t) => (
-                            <span key={t} className={'chip ' + (RANK_CHIP[t] || 'blue')}>{t}</span>
-                          ))}
-                        </div>
+                    <div className={'cf-card cf-alert-card' + (editingMemo ? ' editing' : '')} style={{ flex: 1 }}>
+                      <div className="cf-card-head">
+                        <Icon name="bolt" size={13} style={{ color: 'var(--danger)' }} />
+                        <span className="cf-section-title">要注意事項</span>
+                        <button className="cf-edit-btn" onClick={() => setEditingMemo((v) => !v)}>
+                          <Icon name="edit" size={12} />
+                        </button>
                       </div>
-                    )}
+                      {editingMemo ? (
+                        <>
+                          <textarea
+                            className="cf-memo-input"
+                            rows={4}
+                            value={memoDraft}
+                            onChange={(e) => setMemoDraft(e.target.value)}
+                          />
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                            <button className="btn sm primary" onClick={saveMemo}>保存</button>
+                            <button className="btn sm" onClick={() => { setEditingMemo(false); setMemoDraft(c.alert_memo || ''); }}>キャンセル</button>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="cf-alert-text">{c.alert_memo || 'なし'}</p>
+                      )}
+                    </div>
                   </div>
                 </div>
 

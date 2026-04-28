@@ -1,6 +1,20 @@
+import { useState } from 'react';
 import Icon from './Icon.jsx';
 
 export default function MasterTable({ rows, columns, onEdit, onDelete, onAdd, addLabel = '+ 追加', onMoveUp, onMoveDown }) {
+  const [pendingDelete, setPendingDelete] = useState(null);
+
+  const handleDelete = (row) => {
+    const key = row.id ?? JSON.stringify(row);
+    if (pendingDelete !== key) {
+      setPendingDelete(key);
+      setTimeout(() => setPendingDelete((cur) => cur === key ? null : cur), 3000);
+      return;
+    }
+    setPendingDelete(null);
+    onDelete(row);
+  };
+
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -35,8 +49,12 @@ export default function MasterTable({ rows, columns, onEdit, onDelete, onAdd, ad
                   </button>
                 )}
                 {onDelete && (
-                  <button className="btn sm ghost" onClick={() => onDelete(row)} style={{ color: 'var(--danger)' }}>
-                    <Icon name="trash" size={12} />
+                  <button
+                    className="btn sm ghost"
+                    onClick={() => handleDelete(row)}
+                    style={{ color: 'var(--danger)', minWidth: pendingDelete === (row.id ?? JSON.stringify(row)) ? 70 : undefined, fontSize: pendingDelete === (row.id ?? JSON.stringify(row)) ? 10 : undefined }}
+                  >
+                    {pendingDelete === (row.id ?? JSON.stringify(row)) ? '本当に削除' : <Icon name="trash" size={12} />}
                   </button>
                 )}
               </td>

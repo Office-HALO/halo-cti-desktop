@@ -5,6 +5,9 @@ import PersonalSettings from './settings/PersonalSettings.jsx';
 import StoresSettings from './settings/StoresSettings.jsx';
 import CastRanksSettings from './settings/CastRanksSettings.jsx';
 import OptionGroupEditor from './settings/OptionGroupEditor.jsx';
+import RewardMatrix from './settings/RewardMatrix.jsx';
+import RewardRateSettings from './settings/RewardRateSettings.jsx';
+import CastRewardSettings from './settings/CastRewardSettings.jsx';
 
 const KIND_ICONS = {
   course: 'yen', nomination: 'star', extension: 'yen',
@@ -19,6 +22,9 @@ const MENU = [
   { id: 'stores', label: '店舗', icon: 'grid' },
   { id: 'ranks', label: 'キャストランク', icon: 'star' },
   { divider: true, label: '料金 / 報酬' },
+  { id: 'cast_reward', label: 'キャスト報酬', icon: 'star' },
+  { id: 'reward_rates', label: 'レート設定', icon: 'yen' },
+  { id: 'reward_matrix', label: '報酬計算表', icon: 'yen' },
   ...KIND_ORDER.map((k) => ({
     id: `kind:${k}`,
     label: KIND_DEFS[k]?.label || k,
@@ -33,6 +39,9 @@ export default function Settings({ density, setDensity, pattern, setPattern }) {
     if (active === 'personal') return <PersonalSettings density={density} setDensity={setDensity} pattern={pattern} setPattern={setPattern} />;
     if (active === 'stores') return <StoresSettings />;
     if (active === 'ranks') return <CastRanksSettings />;
+    if (active === 'cast_reward') return <CastRewardSettings />;
+    if (active === 'reward_rates') return <RewardRateSettings />;
+    if (active === 'reward_matrix') return <RewardMatrix />;
     if (active.startsWith('kind:')) return <OptionGroupEditor kind={active.slice(5)} />;
     return null;
   };

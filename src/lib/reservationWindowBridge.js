@@ -25,20 +25,25 @@ export async function openReservationWindow({ customer, reservation, onSaved, on
     reservation: reservation || null,
   }));
 
+  let win;
   let cleaned = false;
-  let unlistenSaved, unlistenDeleted;
+  let unlistenSaved, unlistenDeleted, unlistenClose;
+  const closeWin = () => { try { win?.close(); } catch {} };
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     localStorage.removeItem(storageKey);
     unlistenSaved?.();
     unlistenDeleted?.();
+    unlistenClose?.();
   };
 
   try {
-    [unlistenSaved, unlistenDeleted] = await Promise.all([
-      listen(`rsv_saved_${key}`, (event) => { cleanup(); onSaved?.(event.payload); }),
-      listen(`rsv_deleted_${key}`, (event) => { cleanup(); onDeleted?.(event.payload); }),
+    [unlistenSaved, unlistenDeleted, unlistenClose] = await Promise.all([
+      // 保存はデータ通知のみ — ウィンドウは rsv_close_* で閉じる
+      listen(`rsv_saved_${key}`,   (event) => { onSaved?.(event.payload); }),
+      listen(`rsv_deleted_${key}`, (event) => { closeWin(); cleanup(); onDeleted?.(event.payload); }),
+      listen(`rsv_close_${key}`,   ()      => { closeWin(); cleanup(); }),
     ]);
   } catch (e) {
     console.error('listen failed', e);
@@ -46,15 +51,14 @@ export async function openReservationWindow({ customer, reservation, onSaved, on
     return null;
   }
 
-  let win;
   try {
     win = new WebviewWindow(`rsv_win_${key}`, {
       url: `/?rsvKey=${key}`,
       title: customer ? `予約入力 — ${customer.name}` : '予約入力',
-      width: 1120,
-      height: 700,
-      minWidth: 900,
-      minHeight: 560,
+      width: 1400,
+      height: 760,
+      minWidth: 1100,
+      minHeight: 600,
       resizable: true,
       decorations: true,
     });

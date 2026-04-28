@@ -4,6 +4,7 @@
   "description": "Capability for dynamically opened reservation windows",
   "windows": ["rsv_win_*"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "core:window:allow-close"
   ]
 }

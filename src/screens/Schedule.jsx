@@ -38,8 +38,9 @@ export default function Schedule({ density = 'compact' }) {
   const todayDate = useAppStore((s) => s.todayDate);
   const setTodayDate = useAppStore((s) => s.setTodayDate);
   const currentStoreId = useAppStore((s) => s.currentStoreId);
-  const { cast, bookings, loading } = useShifts(todayDate, currentStoreId);
+  const { cast, bookings, loading, refresh } = useShifts(todayDate, currentStoreId);
   const [hover, setHover] = useState(null);
+
   const openBooking = async (id) => {
     const { data, error } = await supabase
       .from('reservations')
@@ -47,7 +48,18 @@ export default function Schedule({ density = 'compact' }) {
       .eq('id', id)
       .maybeSingle();
     if (error || !data) return;
-    openReservationWindow({ customer: data.customers, reservation: data });
+    openReservationWindow({
+      customer: data.customers,
+      reservation: data,
+      onSaved: () => refresh(),
+      onDeleted: () => refresh(),
+    });
+  };
+
+  const newBooking = () => {
+    openReservationWindow({
+      onSaved: () => refresh(),
+    });
   };
 
   const pxPerMin = PX_PER_MIN_BY_DENSITY[density] || PX_PER_MIN_BY_DENSITY.standard;
@@ -101,7 +113,7 @@ export default function Schedule({ density = 'compact' }) {
           )}
         </div>
         <div style={{ marginLeft: 'auto' }}>
-          <button className="btn sm"><Icon name="plus" size={12} />新規予約</button>
+          <button className="btn sm" onClick={newBooking}><Icon name="plus" size={12} />新規予約</button>
         </div>
       </div>
 

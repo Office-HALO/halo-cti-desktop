@@ -7,12 +7,14 @@ const INP = {
   outline: 'none', width: '100%', boxSizing: 'border-box',
 };
 
+// nomination もランク別価格を使える（Gran★2〜5の指名料差など）
 function needsPerRank(kind) {
-  return kind === 'course' || kind === 'extension';
+  return kind === 'course' || kind === 'extension' || kind === 'nomination';
 }
 
 function defaultPriceMode(kind) {
-  return needsPerRank(kind) ? 'per_rank' : 'flat';
+  if (kind === 'course' || kind === 'extension') return 'per_rank';
+  return 'flat';
 }
 
 function defaultRewardMode(kind) {
@@ -37,6 +39,8 @@ export default function OptionItemEditor({ kind, ranks, item, rankPrices = {}, o
     reward_flat: item?.reward_flat != null ? String(item.reward_flat) : '',
     reward_first: item?.reward_first != null ? String(item.reward_first) : '',
     reward_repeat: item?.reward_repeat != null ? String(item.reward_repeat) : '',
+    reward_percent_first: item?.reward_percent_first != null ? String(item.reward_percent_first) : '',
+    reward_percent_repeat: item?.reward_percent_repeat != null ? String(item.reward_percent_repeat) : '',
   }));
   const [rankPriceForm, setRankPriceForm] = useState(() => {
     const init = {};
@@ -49,7 +53,6 @@ export default function OptionItemEditor({ kind, ranks, item, rankPrices = {}, o
   const showDuration = kind === 'course' || kind === 'extension';
   const showPrice = kind !== 'hotel' && kind !== 'driver' && kind !== 'media';
   const showReward = kind !== 'transport' && kind !== 'hotel' && kind !== 'driver' && kind !== 'media' && kind !== 'discount';
-  const rewardModeFixed = kind === 'nomination' || kind === 'course' || kind === 'extension';
 
   const handleSave = () => {
     if (!form.name.trim()) return;
@@ -60,7 +63,7 @@ export default function OptionItemEditor({ kind, ranks, item, rankPrices = {}, o
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-panel"
-        style={{ width: 'min(600px, calc(100vw - 32px))' }}
+        style={{ width: 'min(620px, calc(100vw - 32px))' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
@@ -137,43 +140,87 @@ export default function OptionItemEditor({ kind, ranks, item, rankPrices = {}, o
           {/* 報酬 */}
           {showReward && (
             <FieldGroup label="キャスト報酬">
-              {kind === 'nomination' ? (
+
+              {/* nomination: first_vs_repeat（固定額）or percent_first_vs_repeat（%） */}
+              {kind === 'nomination' && (
                 <>
-                  <FormRow label="初回報酬">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ color: 'var(--muted)', fontSize: 12 }}>¥</span>
-                      <input style={{ ...INP, width: 120 }} type="number" value={form.reward_first} onChange={(e) => set('reward_first', e.target.value)} />
+                  <FormRow label="報酬モード">
+                    <div className="btn-group">
+                      {[
+                        ['first_vs_repeat',         '固定額（初回/リピート）'],
+                        ['percent_first_vs_repeat', '割合%（初回/リピート）'],
+                      ].map(([m, lbl]) => (
+                        <button key={m} className={'btn sm' + (form.reward_mode === m ? ' primary' : '')} onClick={() => set('reward_mode', m)}>
+                          {lbl}
+                        </button>
+                      ))}
                     </div>
                   </FormRow>
-                  <FormRow label="リピート報酬">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ color: 'var(--muted)', fontSize: 12 }}>¥</span>
-                      <input style={{ ...INP, width: 120 }} type="number" value={form.reward_repeat} onChange={(e) => set('reward_repeat', e.target.value)} />
-                    </div>
-                  </FormRow>
+                  {form.reward_mode === 'first_vs_repeat' && (
+                    <>
+                      <FormRow label="初回報酬">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ color: 'var(--muted)', fontSize: 12 }}>¥</span>
+                          <input style={{ ...INP, width: 120 }} type="number" value={form.reward_first} onChange={(e) => set('reward_first', e.target.value)} />
+                        </div>
+                      </FormRow>
+                      <FormRow label="リピート報酬">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ color: 'var(--muted)', fontSize: 12 }}>¥</span>
+                          <input style={{ ...INP, width: 120 }} type="number" value={form.reward_repeat} onChange={(e) => set('reward_repeat', e.target.value)} />
+                        </div>
+                      </FormRow>
+                    </>
+                  )}
+                  {form.reward_mode === 'percent_first_vs_repeat' && (
+                    <PercentFirstRepeatFields form={form} set={set} />
+                  )}
                 </>
-              ) : (kind === 'course' || kind === 'extension') ? (
-                <FormRow label="報酬率">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <input style={{ ...INP, width: 80 }} type="number" value={form.reward_percent} onChange={(e) => set('reward_percent', e.target.value)} />
-                    <span style={{ color: 'var(--muted)', fontSize: 12 }}>%</span>
-                  </div>
-                </FormRow>
-              ) : (
+              )}
+
+              {/* course / extension: percent（固定%）or percent_first_vs_repeat（初回%/リピート%） */}
+              {(kind === 'course' || kind === 'extension') && (
                 <>
-                  {!rewardModeFixed && (
-                    <FormRow label="報酬モード">
-                      <select
-                        style={{ ...INP, width: 'auto' }}
-                        value={form.reward_mode}
-                        onChange={(e) => set('reward_mode', e.target.value)}
-                      >
-                        <option value="none">なし</option>
-                        <option value="flat">固定額</option>
-                        {kind === 'event' && <option value="percent">割合 (%)</option>}
-                      </select>
+                  <FormRow label="報酬モード">
+                    <div className="btn-group">
+                      {[
+                        ['percent',                 '固定%'],
+                        ['percent_first_vs_repeat', '初回/リピート別%'],
+                      ].map(([m, lbl]) => (
+                        <button key={m} className={'btn sm' + (form.reward_mode === m ? ' primary' : '')} onClick={() => set('reward_mode', m)}>
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                  </FormRow>
+                  {form.reward_mode === 'percent' && (
+                    <FormRow label="報酬率">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input style={{ ...INP, width: 80 }} type="number" value={form.reward_percent} onChange={(e) => set('reward_percent', e.target.value)} />
+                        <span style={{ color: 'var(--muted)', fontSize: 12 }}>%</span>
+                      </div>
                     </FormRow>
                   )}
+                  {form.reward_mode === 'percent_first_vs_repeat' && (
+                    <PercentFirstRepeatFields form={form} set={set} />
+                  )}
+                </>
+              )}
+
+              {/* その他のkind（event, option, other など） */}
+              {kind !== 'nomination' && kind !== 'course' && kind !== 'extension' && (
+                <>
+                  <FormRow label="報酬モード">
+                    <select
+                      style={{ ...INP, width: 'auto' }}
+                      value={form.reward_mode}
+                      onChange={(e) => set('reward_mode', e.target.value)}
+                    >
+                      <option value="none">なし</option>
+                      <option value="flat">固定額</option>
+                      {kind === 'event' && <option value="percent">割合 (%)</option>}
+                    </select>
+                  </FormRow>
                   {form.reward_mode === 'flat' && (
                     <FormRow label="報酬">
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -192,6 +239,7 @@ export default function OptionItemEditor({ kind, ranks, item, rankPrices = {}, o
                   )}
                 </>
               )}
+
             </FieldGroup>
           )}
 
@@ -202,6 +250,43 @@ export default function OptionItemEditor({ kind, ranks, item, rankPrices = {}, o
         </div>
       </div>
     </div>
+  );
+}
+
+// 初回%/リピート% 入力フィールド（course/extension/nomination で共用）
+function PercentFirstRepeatFields({ form, set }) {
+  return (
+    <>
+      <FormRow label="初回バック率">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit', outline: 'none', width: 80, boxSizing: 'border-box' }}
+            type="number"
+            step="0.1"
+            value={form.reward_percent_first}
+            onChange={(e) => set('reward_percent_first', e.target.value)}
+            placeholder="55"
+          />
+          <span style={{ color: 'var(--muted)', fontSize: 12 }}>%　（初回・ネット指名）</span>
+        </div>
+      </FormRow>
+      <FormRow label="リピートバック率">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit', outline: 'none', width: 80, boxSizing: 'border-box' }}
+            type="number"
+            step="0.1"
+            value={form.reward_percent_repeat}
+            onChange={(e) => set('reward_percent_repeat', e.target.value)}
+            placeholder="60"
+          />
+          <span style={{ color: 'var(--muted)', fontSize: 12 }}>%　（リピート・本指名）</span>
+        </div>
+      </FormRow>
+      <div style={{ fontSize: 11, color: 'var(--muted)', paddingLeft: 138, lineHeight: 1.5 }}>
+        ※ 端数は100円単位で切り上げ（Excelの CEILING 相当）
+      </div>
+    </>
   );
 }
 

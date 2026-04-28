@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import Icon from '../components/Icon.jsx';
 import Avatar from '../components/Avatar.jsx';
-import { useCustomers, loadCustomerReservations, saveCustomer } from '../hooks/useCustomers.js';
+import { useCustomers, loadCustomerReservations, saveCustomer, loadCustomerCallLogs } from '../hooks/useCustomers.js';
 import { useAppStore } from '../store/state.js';
 import { showToast } from '../lib/toast.js';
 import { formatCallTime } from '../lib/utils.js';
+import { supabase } from '../lib/supabase.js';
 import NewReservationModal from '../overlays/NewReservationModal.jsx';
 import NewCustomerModal from '../overlays/NewCustomerModal.jsx';
 import { exportRowsAsCsv } from '../lib/csv.js';
@@ -142,145 +143,259 @@ export default function Customers() {
 }
 
 function CustomerDetail({ c, onSave }) {
-  const [tab, setTab] = useState('info');
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(null); // null | 'info' | 'alert' | 'shared' | 'memo'
   const [showNewRsv, setShowNewRsv] = useState(false);
+  const [showMemoAdd, setShowMemoAdd] = useState(false);
+  const [newMemo, setNewMemo] = useState('');
   const [form, setForm] = useState({
     name: c.name || '',
     rank: c.rank || 'C',
     tags: (c.tags || []).join(', '),
-    memo: c.memo || '',
     alert_memo: c.alert_memo || '',
     shared_memo: c.shared_memo || '',
   });
+  const [history, setHistory] = useState(null);
+  const [callLogs, setCallLogs] = useState(null);
 
-  const upd = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+  useEffect(() => {
+    loadCustomerReservations(c.id).then(setHistory);
+  }, [c.id]);
 
-  const handleSave = () => {
-    const patch = {
-      name: form.name || null,
-      rank: form.rank,
-      tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean),
-      memo: form.memo || null,
-      alert_memo: form.alert_memo || null,
-      shared_memo: form.shared_memo || null,
-    };
-    onSave(c.id, patch);
-    setEditing(false);
+  useEffect(() => {
+    const phone = c.phone_normalized || c.phone;
+    const fetch = () => loadCustomerCallLogs(phone, 6).then(setCallLogs);
+    fetch();
+    const ch = supabase
+      .channel(`call_logs_detail_${c.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, fetch)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [c.id, c.phone_normalized, c.phone]);
+
+  const upd = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const saveField = (patch) => { onSave(c.id, patch); setEditing(null); };
+
+  const addMemo = async () => {
+    if (!newMemo.trim()) return;
+    const d = new Date();
+    const entry = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${newMemo.trim()}`;
+    const updated = c.memo ? `${entry}\n${c.memo}` : entry;
+    onSave(c.id, { memo: updated });
+    setNewMemo(''); setShowMemoAdd(false);
   };
 
+  const pastMemos = (() => {
+    if (!c.memo) return [];
+    return c.memo.split(/\n+/).map((s) => s.trim()).filter(Boolean).map((line) => {
+      const m = line.match(/^(\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}\/\d{1,2})\s+(.+)$/);
+      return m ? { date: m[1], text: m[2] } : { date: '', text: line };
+    }).slice(0, 8);
+  })();
+
   const tags = c.tags || [];
+  const avg = (c.total_visits ?? 0) > 0 ? Math.round((c.total_spent || 0) / c.total_visits) : 0;
 
   return (
     <div className="cd-root">
       {c.alert_memo && (
-        <div className="cd-alert-banner">
-          <Icon name="bolt" size={13} /> {c.alert_memo}
-        </div>
+        <div className="cd-alert-banner"><Icon name="bolt" size={13} /> {c.alert_memo}</div>
       )}
+
+      {/* ヘッダー */}
       <div className="cd-head">
         <div className="cd-head-l">
-          <Avatar name={c.name} size={52} hue={245} />
+          <Avatar name={c.name} size={44} hue={245} />
           <div>
             <div className="cd-name-row">
               <span className="cd-name">{c.name || '名前未登録'}</span>
-              {tags.map((t) => (
-                <span key={t} className={'chip ' + (RANK_CHIP[t] || '')}>{t}</span>
-              ))}
+              <span className={'chip ' + (RANK_CHIP[c.rank] || '')} style={{ fontSize: 10 }}>{c.rank || 'C'}</span>
+              {tags.map((t) => <span key={t} className={'chip ' + (RANK_CHIP[t] || '')}>{t}</span>)}
             </div>
             <div className="cd-meta">
               {c.phone_normalized && <span className="mono">{c.phone_normalized}</span>}
+              {c.member_no && <><span>·</span><span>会員 {c.member_no}</span></>}
               {c.first_visit_date && <><span>·</span><span>初回 {c.first_visit_date}</span></>}
             </div>
           </div>
         </div>
         <div className="cd-head-r">
-          <button className="btn sm" onClick={() => setEditing(!editing)}>
-            <Icon name="edit" size={12} />{editing ? 'キャンセル' : '編集'}
-          </button>
-          {editing && (
-            <button className="btn sm primary" onClick={handleSave}>
-              保存
-            </button>
-          )}
           <button className="btn sm primary" onClick={() => setShowNewRsv(true)}><Icon name="plus" size={12} />新規予約</button>
         </div>
       </div>
-      {showNewRsv && (
-        <NewReservationModal customer={c} onClose={() => setShowNewRsv(false)} />
-      )}
 
-      <div className="cd-stats">
-        <div className="stat"><div className="stat-lbl">利用回数</div><div className="stat-val mono">{c.total_visits ?? 0}<span className="u">回</span></div></div>
-        <div className="stat"><div className="stat-lbl">総額</div><div className="stat-val mono">¥{(c.total_spent ?? 0).toLocaleString()}</div></div>
-        <div className="stat"><div className="stat-lbl">客単価</div><div className="stat-val mono">¥{Math.round((c.total_spent ?? 0) / Math.max(c.total_visits ?? 1, 1)).toLocaleString()}</div></div>
-        <div className="stat"><div className="stat-lbl">キャンセル</div><div className="stat-val mono" style={{ color: (c.cancel_count ?? 0) > 2 ? 'var(--warn)' : undefined }}>{c.cancel_count ?? 0}<span className="u">回</span></div></div>
-        <div className="stat"><div className="stat-lbl">ランク</div><div className="stat-val mono">{c.rank || 'C'}</div></div>
-        <div className="stat"><div className="stat-lbl">最終利用</div><div className="stat-val mono" style={{ fontSize: 14 }}>{c.last_visit_date || '—'}</div></div>
+      {showNewRsv && <NewReservationModal customer={c} onClose={() => setShowNewRsv(false)} />}
+
+      {/* 上段: 顧客データ ｜ 顧客メモ */}
+      <div className="cf-grid" style={{ margin: '10px 0 8px' }}>
+        <div className="cf-col">
+          <div className="cf-card">
+            <div className="cf-card-head">
+              <Icon name="users" size={13} />
+              <span className="cf-section-title">顧客データ</span>
+              <button className="cf-edit-btn" onClick={() => setEditing(editing === 'info' ? null : 'info')}>
+                <Icon name="edit" size={12} />
+              </button>
+            </div>
+            {editing === 'info' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 12, color: 'var(--muted)' }}>氏名
+                  <input style={{ display: 'block', width: '100%', marginTop: 3, padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }} value={form.name} onChange={upd('name')} />
+                </label>
+                <label style={{ fontSize: 12, color: 'var(--muted)' }}>ランク
+                  <select style={{ display: 'block', width: '100%', marginTop: 3, padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }} value={form.rank} onChange={upd('rank')}>
+                    {['VIP', 'A', 'B', 'C', 'NG'].map((r) => <option key={r}>{r}</option>)}
+                  </select>
+                </label>
+                <label style={{ fontSize: 12, color: 'var(--muted)' }}>タグ（カンマ区切り）
+                  <input style={{ display: 'block', width: '100%', marginTop: 3, padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg)', color: 'var(--text)', fontSize: 13 }} value={form.tags} onChange={upd('tags')} placeholder="優良, 常連" />
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn sm primary" onClick={() => saveField({ name: form.name || null, rank: form.rank, tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean) })}>保存</button>
+                  <button className="btn sm" onClick={() => setEditing(null)}>キャンセル</button>
+                </div>
+              </div>
+            ) : (
+              <div className="cf-customer-box">
+                <div className="cf-cust-name-big">{c.name || '名前未登録'}</div>
+                <div className="cf-cust-phone-row"><Icon name="phoneIn" size={12} /><span className="mono">{c.phone_normalized || '—'}</span></div>
+                <div className="cf-stat-grid">
+                  <div><div className="cf-stat-lbl">利用</div><div className="cf-stat-val"><b>{c.total_visits ?? 0}</b>回</div></div>
+                  <div><div className="cf-stat-lbl">総額</div><div className="cf-stat-val mono">¥{(c.total_spent ?? 0).toLocaleString()}</div></div>
+                  <div><div className="cf-stat-lbl">客単価</div><div className="cf-stat-val mono">¥{avg.toLocaleString()}</div></div>
+                  <div><div className="cf-stat-lbl">キャンセル</div><div className="cf-stat-val"><b style={{ color: (c.cancel_count ?? 0) > 2 ? 'var(--danger)' : undefined }}>{c.cancel_count ?? 0}</b>回</div></div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>最終 {c.last_visit_date || '—'}</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="cf-col">
+          <div className="cf-card" style={{ flex: 1 }}>
+            <div className="cf-card-head">
+              <Icon name="edit" size={13} />
+              <span className="cf-section-title">顧客メモ</span>
+              <button className="cf-edit-btn" onClick={() => setShowMemoAdd((v) => !v)} title="メモを追加">
+                <Icon name="plus" size={12} />
+              </button>
+            </div>
+            {showMemoAdd && (
+              <div style={{ marginBottom: 10 }}>
+                <textarea
+                  className="cf-memo-input"
+                  rows={2}
+                  placeholder="会話メモを入力..."
+                  value={newMemo}
+                  onChange={(e) => setNewMemo(e.target.value)}
+                  autoFocus
+                />
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button className="btn sm primary" onClick={addMemo}>追加</button>
+                  <button className="btn sm" onClick={() => { setShowMemoAdd(false); setNewMemo(''); }}>キャンセル</button>
+                </div>
+              </div>
+            )}
+            {pastMemos.length > 0 ? (
+              <div className="cf-past-memos">
+                {pastMemos.map((m, i) => (
+                  <div key={i} className="cf-past-memo">
+                    {m.date && <span className="cf-past-date mono">{m.date}</span>}
+                    <span className="cf-past-text">{m.text}</span>
+                  </div>
+                ))}
+              </div>
+            ) : !showMemoAdd && (
+              <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>メモなし</div>
+            )}
+          </div>
+        </div>
       </div>
 
-      <div className="cd-tabs">
-        {[['info', '基本情報'], ['memo', 'メモ'], ['history', '利用履歴']].map(([k, lbl]) => (
-          <button key={k} className={'cd-tab' + (tab === k ? ' active' : '')} onClick={() => setTab(k)}>{lbl}</button>
-        ))}
+      {/* 下段: 着信履歴 ｜ 女子への連絡事項 + 要注意事項 */}
+      <div className="cf-grid" style={{ marginBottom: 10 }}>
+        <div className="cf-col">
+          <div className="cf-card" style={{ flex: 1 }}>
+            <div className="cf-card-head">
+              <Icon name="phoneIn" size={13} />
+              <span className="cf-section-title">着信履歴</span>
+            </div>
+            {!callLogs ? (
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>読み込み中...</div>
+            ) : callLogs.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>着信記録なし</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {callLogs.map((r) => (
+                  <div key={r.id} style={{ display: 'flex', gap: 8, fontSize: 12, alignItems: 'center' }}>
+                    <span className="mono" style={{ color: 'var(--muted)', flexShrink: 0 }}>{formatCallTime(r.started_at)}</span>
+                    {r.duration != null && (
+                      <span style={{ color: 'var(--muted)', flexShrink: 0 }}>{r.duration}秒</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="cf-col" style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
+          <div className="cf-card" style={{ flex: 1 }}>
+            <div className="cf-card-head">
+              <Icon name="bolt" size={13} />
+              <span className="cf-section-title">女子への連絡事項</span>
+              <button className="cf-edit-btn" onClick={() => setEditing(editing === 'shared' ? null : 'shared')}>
+                <Icon name="edit" size={12} />
+              </button>
+            </div>
+            {editing === 'shared' ? (
+              <>
+                <textarea className="cf-memo-input" rows={4} value={form.shared_memo} onChange={upd('shared_memo')} />
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button className="btn sm primary" onClick={() => saveField({ shared_memo: form.shared_memo || null })}>保存</button>
+                  <button className="btn sm" onClick={() => setEditing(null)}>キャンセル</button>
+                </div>
+              </>
+            ) : (
+              <p className="cf-lady-memo">{c.shared_memo || 'なし'}</p>
+            )}
+          </div>
+          <div className="cf-card cf-alert-card" style={{ flex: 1 }}>
+            <div className="cf-card-head">
+              <Icon name="bolt" size={13} style={{ color: 'var(--danger)' }} />
+              <span className="cf-section-title">要注意事項</span>
+              <button className="cf-edit-btn" onClick={() => setEditing(editing === 'alert' ? null : 'alert')}>
+                <Icon name="edit" size={12} />
+              </button>
+            </div>
+            {editing === 'alert' ? (
+              <>
+                <textarea className="cf-memo-input" rows={4} value={form.alert_memo} onChange={upd('alert_memo')} />
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button className="btn sm primary" onClick={() => saveField({ alert_memo: form.alert_memo || null })}>保存</button>
+                  <button className="btn sm" onClick={() => setEditing(null)}>キャンセル</button>
+                </div>
+              </>
+            ) : (
+              <p className="cf-alert-text">{c.alert_memo || 'なし'}</p>
+            )}
+          </div>
+        </div>
       </div>
 
-      {tab === 'info' && (
-        <div className="cd-tab-body">
-          {editing ? (
-            <div className="cd-edit-form">
-              <label>氏名<input value={form.name} onChange={upd('name')} /></label>
-              <label>ランク
-                <select value={form.rank} onChange={upd('rank')}>
-                  {['VIP', 'A', 'B', 'C', 'NG'].map((r) => <option key={r}>{r}</option>)}
-                </select>
-              </label>
-              <label>タグ（カンマ区切り）<input value={form.tags} onChange={upd('tags')} placeholder="優良, 常連" /></label>
-            </div>
-          ) : (
-            <div className="kv">
-              <div><span className="k">氏名</span><span className="v">{c.name || '—'}</span></div>
-              <div><span className="k">電話番号</span><span className="v mono">{c.phone_normalized || '—'}</span></div>
-              <div><span className="k">ランク</span><span className="v">{c.rank || 'C'}</span></div>
-              <div><span className="k">ステータス</span><span className="v">{tags.map((t) => <span key={t} className={'chip ' + (RANK_CHIP[t] || '')}>{t}</span>)}</span></div>
-              <div><span className="k">初来店</span><span className="v">{c.first_visit_date || '—'}</span></div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === 'memo' && (
-        <div className="cd-tab-body">
-          {editing ? (
-            <div className="cd-edit-form">
-              <label>⚠️ 注意メモ<textarea rows={3} value={form.alert_memo} onChange={upd('alert_memo')} placeholder="着信時に赤バナー表示" /></label>
-              <label>🔄 共有メモ<textarea rows={3} value={form.shared_memo} onChange={upd('shared_memo')} placeholder="スタッフ間の申し送り" /></label>
-              <label>📝 一般メモ<textarea rows={4} value={form.memo} onChange={upd('memo')} /></label>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {c.alert_memo && <div className="memo-body alert">{c.alert_memo}</div>}
-              {c.shared_memo && <div className="memo-body" style={{ borderLeft: '3px solid var(--info)' }}>🔄 {c.shared_memo}</div>}
-              {c.memo && <div className="memo-body">{c.memo}</div>}
-              {!c.alert_memo && !c.shared_memo && !c.memo && (
-                <div style={{ padding: 20, color: 'var(--muted)', textAlign: 'center', fontSize: 12 }}>メモなし</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === 'history' && <ReservationHistory customerId={c.id} />}
+      {/* 利用履歴テーブル（全幅） */}
+      <ReservationHistory customerId={c.id} history={history} />
     </div>
   );
 }
 
-function ReservationHistory({ customerId }) {
-  const [rows, setRows] = useState(null);
+function ReservationHistory({ customerId, history: historyProp }) {
+  const [rows, setRows] = useState(historyProp ?? null);
 
   useEffect(() => {
+    if (historyProp !== undefined) { setRows(historyProp); return; }
     loadCustomerReservations(customerId).then(setRows);
-  }, [customerId]);
+  }, [customerId, historyProp]);
 
   if (!rows) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>読み込み中...</div>;
   if (rows.length === 0) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>予約・来店記録なし</div>;

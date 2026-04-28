@@ -54,9 +54,42 @@ export default function StoresSettings() {
   };
 
   const del = async (row) => {
-    if (!confirm(`「${row.name}」を削除しますか？\n関連するキャストランク・オプション等も全て削除されます。`)) return;
-    const { error } = await supabase.from('stores').delete().eq('id', row.id);
-    if (error) { showToast('error', error.message); return; }
+    // 関連マスタを先に削除してから店舗を削除（FK制約対策）
+    const id = row.id;
+
+    // cast_ranks を消す前に ladies.cast_rank_id を null に（FK: ladies_cast_rank_id_fkey）
+    const { data: rankRows } = await supabase.from('cast_ranks').select('id').eq('store_id', id);
+    if (rankRows?.length) {
+      const rankIds = rankRows.map((r) => r.id);
+      await supabase.from('ladies').update({ cast_rank_id: null }).in('cast_rank_id', rankIds);
+    }
+    const { error: e1 } = await supabase.from('cast_ranks').delete().eq('store_id', id);
+    if (e1) { showToast('error', 'キャストランク削除失敗: ' + e1.message); return; }
+
+    // option_groups（option_items は option_groups の cascade で消える想定。
+    //   なければ手動で先に消す）
+    const { data: groups } = await supabase.from('option_groups').select('id').eq('store_id', id);
+    if (groups?.length) {
+      const gids = groups.map((g) => g.id);
+      const { data: items } = await supabase.from('option_items').select('id').in('group_id', gids);
+      if (items?.length) {
+        const iids = items.map((i) => i.id);
+        await supabase.from('option_item_rank_prices').delete().in('item_id', iids);
+        await supabase.from('option_items').delete().in('group_id', gids);
+      }
+      await supabase.from('option_groups').delete().eq('store_id', id);
+    }
+
+    // ladies の store_id を null に（退職済み等で残っている分）
+    await supabase.from('ladies').update({ store_id: null, store_code: null }).eq('store_id', id);
+
+    // ※ reservations.store_id は NOT NULL 制約 + RLS のためクライアントから変更不可。
+    //   削除前に Supabase SQL エディタで移行先店舗に UPDATE してください。
+    // ※ staff.default_store_id も RLS のためクライアントから変更不可。同様に SQL で対処。
+
+    // 店舗本体を削除
+    const { error } = await supabase.from('stores').delete().eq('id', id);
+    if (error) { showToast('error', '店舗削除失敗: ' + error.message); return; }
     showToast('ok', '削除しました');
     load();
   };

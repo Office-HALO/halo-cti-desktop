@@ -23,6 +23,7 @@ const P = {
   check:    <><path d="m5 12 5 5 9-11"/></>,
   dot:      <><circle cx="12" cy="12" r="3" fill="currentColor"/></>,
   grid:     <><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></>,
+  list:     <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>,
   filter:   <><path d="M3 5h18l-7 9v6l-4-2v-4z"/></>,
   more:     <><circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/></>,
   external: <><path d="M7 17 17 7M8 7h9v9"/></>,

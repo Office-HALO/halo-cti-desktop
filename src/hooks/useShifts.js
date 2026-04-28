@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase.js';
 
 const hashHue = (s) => {
@@ -78,6 +78,7 @@ export function useShifts(date, storeId) {
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const reloadRef = useRef(null);
 
   useEffect(() => {
     if (!date) return;
@@ -107,6 +108,7 @@ export function useShifts(date, storeId) {
         })
         .catch(() => {});
     };
+    reloadRef.current = reload;
 
     const channel = supabase
       .channel(`shifts-realtime-${date}-${storeId || 'all'}`)
@@ -116,9 +118,12 @@ export function useShifts(date, storeId) {
 
     return () => {
       cancelled = true;
+      reloadRef.current = null;
       supabase.removeChannel(channel);
     };
   }, [date, storeId]);
 
-  return { cast, bookings, loading, error };
+  const refresh = useCallback(() => { reloadRef.current?.(); }, []);
+
+  return { cast, bookings, loading, error, refresh };
 }

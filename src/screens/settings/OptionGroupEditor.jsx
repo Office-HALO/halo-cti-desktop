@@ -31,6 +31,19 @@ export default function OptionGroupEditor({ kind }) {
   // Item editor modal
   const [itemModal, setItemModal] = useState(null);
 
+  // Inline delete confirmation (avoids browser confirm() which Tauri blocks)
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState(null);
+  const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
+
+  const armGroupDelete = (id) => {
+    setPendingDeleteGroup(id);
+    setTimeout(() => setPendingDeleteGroup((cur) => cur === id ? null : cur), 3000);
+  };
+  const armItemDelete = (id) => {
+    setPendingDeleteItem(id);
+    setTimeout(() => setPendingDeleteItem((cur) => cur === id ? null : cur), 3000);
+  };
+
   const loadGroups = async () => {
     if (!currentStoreId) return;
     const { data } = await supabase.from('option_groups')
@@ -120,7 +133,8 @@ export default function OptionGroupEditor({ kind }) {
   };
 
   const deleteGroup = async (g) => {
-    if (!confirm(`「${g.label}」を削除しますか？\nアイテムも全て削除されます。`)) return;
+    if (pendingDeleteGroup !== g.id) { armGroupDelete(g.id); return; }
+    setPendingDeleteGroup(null);
     const { error } = await supabase.from('option_groups').delete().eq('id', g.id);
     if (error) { showToast('error', error.message); return; }
     showToast('ok', '削除しました');
@@ -138,7 +152,7 @@ export default function OptionGroupEditor({ kind }) {
     const { groupId, item } = itemModal;
 
     let reward_mode = form.reward_mode;
-    if (kind === 'nomination') reward_mode = 'first_vs_repeat';
+    // nomination は first_vs_repeat / percent_first_vs_repeat どちらも許可（固定しない）
     if (kind === 'transport' || kind === 'hotel' || kind === 'driver' || kind === 'media' || kind === 'discount') reward_mode = 'none';
 
     const payload = {
@@ -155,6 +169,8 @@ export default function OptionGroupEditor({ kind }) {
       reward_flat: form.reward_flat !== '' ? Number(form.reward_flat) : null,
       reward_first: form.reward_first !== '' ? Number(form.reward_first) : null,
       reward_repeat: form.reward_repeat !== '' ? Number(form.reward_repeat) : null,
+      reward_percent_first: form.reward_percent_first !== '' ? Number(form.reward_percent_first) : null,
+      reward_percent_repeat: form.reward_percent_repeat !== '' ? Number(form.reward_percent_repeat) : null,
     };
 
     let savedItemId;
@@ -192,7 +208,8 @@ export default function OptionGroupEditor({ kind }) {
   };
 
   const deleteItem = async (groupId, item) => {
-    if (!confirm(`「${item.name}」を削除しますか？`)) return;
+    if (pendingDeleteItem !== item.id) { armItemDelete(item.id); return; }
+    setPendingDeleteItem(null);
     const { error } = await supabase.from('option_items').delete().eq('id', item.id);
     if (error) { showToast('error', error.message); return; }
     showToast('ok', '削除しました');
@@ -244,6 +261,7 @@ export default function OptionGroupEditor({ kind }) {
             case 'percent': return `${item.reward_percent ?? 0}%`;
             case 'flat': return `¥${Number(item.reward_flat ?? 0).toLocaleString()}`;
             case 'first_vs_repeat': return `初¥${Number(item.reward_first ?? 0).toLocaleString()} / 再¥${Number(item.reward_repeat ?? 0).toLocaleString()}`;
+            case 'percent_first_vs_repeat': return `初${item.reward_percent_first ?? 0}% / 再${item.reward_percent_repeat ?? 0}%`;
             case 'none': return '報酬なし';
             default: return '—';
           }
@@ -265,8 +283,12 @@ export default function OptionGroupEditor({ kind }) {
                 <button className="btn sm ghost" onClick={() => openGroupEdit(g)}>
                   <Icon name="edit" size={12} />
                 </button>
-                <button className="btn sm ghost" style={{ color: 'var(--danger)' }} onClick={() => deleteGroup(g)}>
-                  <Icon name="trash" size={12} />
+                <button
+                  className="btn sm ghost"
+                  style={{ color: 'var(--danger)', minWidth: pendingDeleteGroup === g.id ? 70 : undefined, fontSize: pendingDeleteGroup === g.id ? 10 : undefined }}
+                  onClick={() => deleteGroup(g)}
+                >
+                  {pendingDeleteGroup === g.id ? '本当に削除' : <Icon name="trash" size={12} />}
                 </button>
               </div>
             </div>
@@ -298,8 +320,12 @@ export default function OptionGroupEditor({ kind }) {
                             <button className="btn sm ghost" onClick={() => openItemEdit(g.id, item)} style={{ marginRight: 4 }}>
                               <Icon name="edit" size={12} />
                             </button>
-                            <button className="btn sm ghost" style={{ color: 'var(--danger)' }} onClick={() => deleteItem(g.id, item)}>
-                              <Icon name="trash" size={12} />
+                            <button
+                              className="btn sm ghost"
+                              style={{ color: 'var(--danger)', minWidth: pendingDeleteItem === item.id ? 70 : undefined, fontSize: pendingDeleteItem === item.id ? 10 : undefined }}
+                              onClick={() => deleteItem(g.id, item)}
+                            >
+                              {pendingDeleteItem === item.id ? '本当に削除' : <Icon name="trash" size={12} />}
                             </button>
                           </td>
                         </tr>

@@ -5,7 +5,8 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:window-create",
+    "core:window:allow-close",
+    "core:webview:allow-create-webview-window",
     "opener:default",
     "updater:default",
     "process:default"

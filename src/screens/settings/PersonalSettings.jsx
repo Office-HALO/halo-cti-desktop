@@ -14,6 +14,7 @@ export default function PersonalSettings({ density, setDensity, pattern, setPatt
   });
   const [notify, setNotify] = useState(() => localStorage.getItem(NOTIFY_KEY) === 'true');
   const [version, setVersion] = useState('');
+  const [pendingSignOut, setPendingSignOut] = useState(false);
 
   useEffect(() => { localStorage.setItem(RINGTONE_KEY, String(ringtone)); }, [ringtone]);
   useEffect(() => { localStorage.setItem(NOTIFY_KEY, String(notify)); }, [notify]);
@@ -42,7 +43,11 @@ export default function PersonalSettings({ density, setDensity, pattern, setPatt
   };
 
   const handleSignOut = async () => {
-    if (!confirm('ログアウトしますか?')) return;
+    if (!pendingSignOut) {
+      setPendingSignOut(true);
+      setTimeout(() => setPendingSignOut(false), 3000);
+      return;
+    }
     await signOut?.();
     await supabase.auth.signOut();
     location.reload();
@@ -54,7 +59,9 @@ export default function PersonalSettings({ density, setDensity, pattern, setPatt
         <Row label="ログイン中" value={staff?.name || '—'} />
         <Row label="メール" value={staff?.email || '—'} />
         <div style={{ paddingTop: 4 }}>
-          <button className="btn sm" onClick={handleSignOut} style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}>ログアウト</button>
+          <button className="btn sm" onClick={handleSignOut} style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }}>
+            {pendingSignOut ? '本当にログアウト' : 'ログアウト'}
+          </button>
         </div>
       </Section>
 

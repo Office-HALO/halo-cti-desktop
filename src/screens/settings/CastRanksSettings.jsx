@@ -59,7 +59,6 @@ export default function CastRanksSettings() {
   };
 
   const del = async (row) => {
-    if (!confirm(`「${row.label}」を削除しますか？\nこのランクに紐付くオプション価格も削除されます。`)) return;
     const { error } = await supabase.from('cast_ranks').delete().eq('id', row.id);
     if (error) { showToast('error', error.message); return; }
     showToast('ok', '削除しました');

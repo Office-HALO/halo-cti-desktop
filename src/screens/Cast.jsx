@@ -23,9 +23,19 @@ export default function Cast() {
   const currentStoreId = useAppStore((s) => s.currentStoreId);
   const [loading, setLoading] = useState(!allLadies.length);
   const [q, setQ] = useState('');
-  const [activeOnly, setActiveOnly] = useState(true);
+  const [activeOnly, setActiveOnly] = useState(false);
   const [selected, setSelected] = useState(null);
   const [showNew, setShowNew] = useState(false);
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('cast.viewMode') || 'grid');
+  const [ranks, setRanks] = useState([]);
+
+  useEffect(() => {
+    if (!currentStoreId) return;
+    supabase.from('cast_ranks').select('*').eq('store_id', currentStoreId).order('display_order')
+      .then(({ data }) => setRanks(data || []));
+  }, [currentStoreId]);
+
+  const setView = (v) => { setViewMode(v); localStorage.setItem('cast.viewMode', v); };
 
   const load = async () => {
     setLoading(true);
@@ -46,13 +56,19 @@ export default function Cast() {
     return () => { supabase.removeChannel(channel); };
   }, []);
 
-  const filtered = allLadies.filter((l) => {
-    if (currentStoreId && l.store_id && l.store_id !== currentStoreId) return false;
-    if (activeOnly && !l.is_active) return false;
-    const kw = q.toLowerCase();
-    if (kw && !((l.display_name || l.name || '').toLowerCase().includes(kw))) return false;
-    return true;
-  });
+  const filtered = allLadies
+    .filter((l) => {
+      if (currentStoreId && l.store_id && l.store_id !== currentStoreId) return false;
+      if (activeOnly && !l.is_active) return false;
+      const kw = q.toLowerCase();
+      if (kw && !((l.display_name || l.name || '').toLowerCase().includes(kw))) return false;
+      return true;
+    })
+    // 在籍中を先頭に、退職済みを末尾に
+    .sort((a, b) => {
+      if (a.is_active === b.is_active) return 0;
+      return a.is_active ? -1 : 1;
+    });
 
   return (
     <div className="cast-screen-root">
@@ -67,7 +83,15 @@ export default function Cast() {
         </label>
         <div className="chip blue">在籍中 {allLadies.filter((l) => l.is_active).length}</div>
         <div className="chip">全体 {allLadies.length}</div>
-        <button className="btn sm ghost" onClick={load} style={{ marginLeft: 'auto' }}>
+        <div className="btn-group" style={{ marginLeft: 'auto' }}>
+          <button className={'btn sm' + (viewMode === 'grid' ? ' primary' : ' ghost')} onClick={() => setView('grid')} title="グリッド表示">
+            <Icon name="grid" size={13} />
+          </button>
+          <button className={'btn sm' + (viewMode === 'list' ? ' primary' : ' ghost')} onClick={() => setView('list')} title="リスト表示">
+            <Icon name="list" size={13} />
+          </button>
+        </div>
+        <button className="btn sm ghost" onClick={load}>
           <Icon name="refresh" size={12} />更新
         </button>
         <button className="btn sm primary" onClick={() => setShowNew(true)}><Icon name="plus" size={12} />新規登録</button>
@@ -77,7 +101,7 @@ export default function Cast() {
         <div style={{ padding: 60, textAlign: 'center', color: 'var(--muted)' }}>読み込み中...</div>
       ) : filtered.length === 0 ? (
         <div style={{ padding: 60, textAlign: 'center', color: 'var(--muted)' }}>キャストが見つかりません</div>
-      ) : (
+      ) : viewMode === 'grid' ? (
         <div className="cast-grid-scroll">
           <div className="cast-card-grid">
             {filtered.map((l) => (
@@ -85,17 +109,95 @@ export default function Cast() {
             ))}
           </div>
         </div>
+      ) : (
+        <div className="cast-grid-scroll">
+          <CastListView ladies={filtered} ranks={ranks} onSelect={setSelected} />
+        </div>
       )}
 
       {selected && (
-        <LadyModal lady={selected} onClose={() => setSelected(null)} />
+        <LadyModal lady={selected} onClose={() => setSelected(null)} onSaved={load} />
       )}
       {showNew && (
-        <LadyModal lady={null} onClose={() => setShowNew(false)} />
+        <LadyModal lady={null} onClose={() => setShowNew(false)} onSaved={load} />
       )}
     </div>
   );
 }
+
+function CastListView({ ladies, ranks, onSelect }) {
+  const stores = useAppStore((s) => s.stores);
+  const rankMap = Object.fromEntries(ranks.map((r) => [r.id, r.label]));
+
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+      <thead>
+        <tr style={{ background: 'var(--bg-subtle)', position: 'sticky', top: 0, zIndex: 1 }}>
+          <th style={TH}>#</th>
+          <th style={TH}>源氏名</th>
+          <th style={TH}>本名</th>
+          <th style={TH}>ランク</th>
+          <th style={TH}>タグ / DUO</th>
+          <th style={{ ...TH, minWidth: 200 }}>メモ</th>
+          <th style={TH}>状況</th>
+        </tr>
+      </thead>
+      <tbody>
+        {ladies.map((l, i) => {
+          const p = l.profile || {};
+          const chips = [];
+          if (p.duo === true) chips.push({ label: 'DUO可', cls: 'green' });
+          if (p.duo === false) chips.push({ label: 'DUO不可', cls: 'red' });
+          if (p.tattoo) chips.push({ label: 'タトゥー', cls: 'amber' });
+          (p.ng_areas || []).forEach((a) => chips.push({ label: `NG:${a}`, cls: 'red' }));
+          (p.tags || []).forEach((t) => chips.push({ label: t, cls: '' }));
+          const storeName = stores.find((s) => s.id === l.store_id)?.name || '';
+          const rankLabel = l.cast_rank_id ? (rankMap[l.cast_rank_id] || '—') : '—';
+
+          return (
+            <tr
+              key={l.id}
+              style={{ borderBottom: '1px solid var(--line-2)', cursor: 'pointer', opacity: l.is_active ? 1 : 0.45 }}
+              onClick={() => onSelect(l)}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-subtle)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = ''}
+            >
+              <td style={TD}>{i + 1}</td>
+              <td style={{ ...TD, fontWeight: 600 }}>
+                {l.display_name || l.name || '—'}
+                {storeName && <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 400 }}>{storeName}</div>}
+              </td>
+              <td style={{ ...TD, color: 'var(--muted)' }}>{l.name || '—'}</td>
+              <td style={TD}>
+                <span style={{ fontSize: 11, background: 'var(--bg-subtle)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 4 }}>
+                  {rankLabel}
+                </span>
+              </td>
+              <td style={TD}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                  {chips.slice(0, 4).map((c, j) => (
+                    <span key={j} className={'chip ' + c.cls} style={{ height: 16, padding: '0 5px', fontSize: 9 }}>{c.label}</span>
+                  ))}
+                </div>
+              </td>
+              <td style={{ ...TD, color: 'var(--muted)', maxWidth: 300 }}>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.memo || ''}</div>
+              </td>
+              <td style={TD}>
+                <span className={'chip ' + (l.is_active ? 'green' : '')} style={{ fontSize: 10 }}>
+                  {l.is_active ? '在籍' : '退職'}
+                </span>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+const TH = { textAlign: 'left', padding: '7px 10px', color: 'var(--muted)', fontWeight: 600, fontSize: 11, whiteSpace: 'nowrap' };
+const TD = { padding: '8px 10px', verticalAlign: 'middle' };
 
 function CastCard({ lady, onClick }) {
   const stores = useAppStore((s) => s.stores);
@@ -132,7 +234,7 @@ function CastCard({ lady, onClick }) {
   );
 }
 
-function LadyModal({ lady, onClose }) {
+function LadyModal({ lady, onClose, onSaved }) {
   const stores = useAppStore((s) => s.stores);
   const currentStoreId = useAppStore((s) => s.currentStoreId);
   const isNew = !lady?.id;
@@ -188,13 +290,16 @@ function LadyModal({ lady, onClose }) {
     };
     let resp;
     if (isNew) {
-      resp = await supabase.from('ladies').insert(payload).select().single();
+      // login_token は NOT NULL のため、新規登録時にランダムトークンを生成
+      const token = crypto.randomUUID();
+      resp = await supabase.from('ladies').insert({ ...payload, login_token: token }).select().single();
     } else {
       resp = await supabase.from('ladies').update(payload).eq('id', lady.id).select().single();
     }
     setLoading(false);
     if (resp.error) { showToast('error', '保存失敗: ' + resp.error.message); return; }
     showToast('success', isNew ? 'キャストを登録しました' : '更新しました');
+    onSaved?.();
     onClose();
   };
 
@@ -205,12 +310,32 @@ function LadyModal({ lady, onClose }) {
     setLoading(false);
     if (error) { showToast('error', '退職処理失敗: ' + error.message); return; }
     showToast('success', '退職処理しました');
+    onSaved?.();
+    onClose();
+  };
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteLady = async () => {
+    if (!confirmDelete) { setConfirmDelete(true); return; }
+    setLoading(true);
+    // 1. シフトを削除（FK: shifts_lady_id_fkey）
+    const { error: shiftErr } = await supabase.from('shifts').delete().eq('lady_id', lady.id);
+    if (shiftErr) { setLoading(false); showToast('error', 'シフト削除失敗: ' + shiftErr.message); return; }
+    // 2. 予約の lady_id を null に（予約履歴は残す）
+    const { error: rsvErr } = await supabase.from('reservations').update({ lady_id: null }).eq('lady_id', lady.id);
+    if (rsvErr) { setLoading(false); showToast('error', '予約更新失敗: ' + rsvErr.message); return; }
+    // 3. 本人を削除
+    const { error } = await supabase.from('ladies').delete().eq('id', lady.id);
+    setLoading(false);
+    if (error) { showToast('error', '削除失敗: ' + error.message); return; }
+    showToast('success', '削除しました');
+    onSaved?.();
     onClose();
   };
 
   return (
     <div className="modal-overlay" onClick={handleBackdrop}>
-      <div className="nr-modal" style={{ position: 'relative', transform: 'none' }}>
+      <div className="nr-modal">
         <div className="nr-head">
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <Avatar name={displayName || name || '?'} size={44} hue={hue} />
@@ -239,7 +364,7 @@ function LadyModal({ lady, onClose }) {
                 {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </label>
-            <label className="nr-field">
+            <label className="nr-field nr-full">
               <span>キャストランク</span>
               <select value={castRankId} onChange={(e) => setCastRankId(e.target.value)} disabled={!storeId}>
                 <option value="">— 未設定 —</option>
@@ -287,6 +412,17 @@ function LadyModal({ lady, onClose }) {
           {!isNew && isActive && (
             <button className="cf-btn danger-outline" onClick={retire} disabled={loading}>
               {confirmRetire ? '本当に退職処理する' : '退職処理'}
+            </button>
+          )}
+          {!isNew && !isActive && (
+            <button
+              className="cf-btn danger-outline"
+              onClick={deleteLady}
+              disabled={loading}
+              style={{ borderColor: '#ef4444', color: '#ef4444' }}
+              title="シフトも削除されます。予約履歴は担当者なしとして保持されます。"
+            >
+              {confirmDelete ? '⚠ シフトごと完全削除する' : '削除'}
             </button>
           )}
           <button className="cf-btn ghost" onClick={onClose} disabled={loading}>キャンセル</button>
