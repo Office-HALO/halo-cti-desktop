@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import Icon from '../components/Icon.jsx';
 import { useAppStore } from '../store/state.js';
 import { useCallLogs } from '../hooks/useCallLogs.js';
@@ -14,7 +14,10 @@ export default function Incoming() {
   const callsDate = useAppStore((s) => s.callsDate);
   const setCallsDate = useAppStore((s) => s.setCallsDate);
   const { rows, loading, reload } = useCallLogs(callsDate);
-  const [busy, setBusy] = useState(null);
+  const [busy,        setBusy]        = useState(null);
+  const [editingMemo, setEditingMemo] = useState(null); // row id being edited
+  const [memoVal,     setMemoVal]     = useState('');
+  const memoInputRef = useRef(null);
 
   const shiftDate = (offset) => {
     if (offset === 0) {
@@ -38,16 +41,25 @@ export default function Incoming() {
     else reload();
   };
 
-  const editMemo = async (id, current) => {
-    const val = prompt('メモを入力してください:', current || '');
-    if (val === null) return;
+  const startEditMemo = (id, current) => {
+    setEditingMemo(id);
+    setMemoVal(current || '');
+    // 次のフレームでフォーカス
+    setTimeout(() => memoInputRef.current?.focus(), 30);
+  };
+
+  const saveMemo = useCallback(async (id, val) => {
+    setEditingMemo(null);
+    const trimmed = val.trim();
+    const row = rows.find(r => r.id === id);
+    if (trimmed === (row?.memo || '')) return; // 変更なし
     const { error } = await supabase
       .from('call_logs')
-      .update({ memo: val.trim() || null })
+      .update({ memo: trimmed || null })
       .eq('id', id);
     if (error) showToast('error', '保存失敗');
     else reload();
-  };
+  }, [rows, reload]);
 
   const total = rows.length;
   const unanswered = rows.filter((r) => r.callback_status === 'none').length;
@@ -123,12 +135,36 @@ export default function Incoming() {
                       {r.source === 'twilio' ? 'Twilio' : '手動'}
                     </span>
                   </div>
-                  <div
-                    className="ht-memo"
-                    onClick={() => editMemo(r.id, r.memo)}
-                    title="クリックで編集"
-                  >
-                    {r.memo || <span className="ht-memo-empty">クリックで入力</span>}
+                  <div className="ht-memo">
+                    {editingMemo === r.id ? (
+                      <input
+                        ref={memoInputRef}
+                        type="text"
+                        value={memoVal}
+                        onChange={(e) => setMemoVal(e.target.value)}
+                        onBlur={() => saveMemo(r.id, memoVal)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); saveMemo(r.id, memoVal); }
+                          if (e.key === 'Escape') { setEditingMemo(null); }
+                        }}
+                        style={{
+                          width: '100%', padding: '3px 6px',
+                          border: '1px solid var(--halo-400, #60a5fa)',
+                          borderRadius: 4, fontSize: 12,
+                          background: 'var(--bg)', color: 'var(--text)',
+                          fontFamily: 'inherit', outline: 'none',
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                    ) : (
+                      <span
+                        onClick={() => startEditMemo(r.id, r.memo)}
+                        title="クリックで編集"
+                        style={{ cursor: 'text', display: 'block', minHeight: 22 }}
+                      >
+                        {r.memo || <span className="ht-memo-empty">クリックで入力</span>}
+                      </span>
+                    )}
                   </div>
                   <div>
                     <button
