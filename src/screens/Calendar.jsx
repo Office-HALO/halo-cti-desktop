@@ -48,6 +48,16 @@ function getHalfPeriod(offset) {
   };
 }
 
+/** DB由来の文字列をHTMLテキストノード・属性値の両方で安全にエスケープする */
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function buildGridHtml(ladies, shiftMap, rsvMap, dates, today) {
   const buildFixedRows = (shifts, dateStr) => {
     const nameCells = [];
@@ -60,21 +70,27 @@ function buildGridHtml(ladies, shiftMap, rsvMap, dates, today) {
         const endMark = s.end_type === 'reception' ? 'あ' : '';
         const timeStr = `${fmtHour(s.start_time)}-${fmtHour(s.end_time)}${endMark}`;
         const ladyName = l.display_name || l.name;
+        // DB由来の文字列はエスケープして XSS を防ぐ
+        const safeNameAttr = escapeHtml(ladyName);
+        const safeNameText = escapeHtml(ladyName);
+        const safeTimeAttr = escapeHtml(timeStr);
+        const safeTimeText = escapeHtml(timeStr);
         const rsv = rsvMap[dateStr]?.[l.id] || [];
         const rsvCnt = rsv.filter((r) => r.status === 'reserved').length;
         const visitCnt = rsv.filter((r) => r.status === 'visited').length;
         const badges =
           (rsvCnt ? `<span class="clg-rsv-dot">予${rsvCnt}</span>` : '') +
           (visitCnt ? `<span class="clg-visit-dot">来${visitCnt}</span>` : '');
+        // rsvJson は encodeURIComponent 済みのため属性値として安全
         const rsvJson = encodeURIComponent(JSON.stringify(rsv.map((r) => ({
           custName: r.customers?.name || '—',
           status: r.status,
           time: (r.start_time || '').slice(0, 5) + (r.end_time ? '〜' + r.end_time.slice(0, 5) : ''),
           course: r.course || '',
         }))));
-        const attrs = `data-lady="${ladyName}" data-date="${dateStr}" data-time="${timeStr}" data-rsv="${rsvJson}" data-cell="true"`;
-        nameCells.push(`<div class="clg-cell clg-name-cell" style="background:${bg};" ${attrs}><span class="clg-cell-text">${ladyName}</span>${badges}</div>`);
-        timeCells.push(`<div class="clg-cell clg-time-cell" style="background:${bg};" ${attrs}><span class="clg-cell-text">${timeStr}</span></div>`);
+        const attrs = `data-lady="${safeNameAttr}" data-date="${dateStr}" data-time="${safeTimeAttr}" data-rsv="${rsvJson}" data-cell="true"`;
+        nameCells.push(`<div class="clg-cell clg-name-cell" style="background:${bg};" ${attrs}><span class="clg-cell-text">${safeNameText}</span>${badges}</div>`);
+        timeCells.push(`<div class="clg-cell clg-time-cell" style="background:${bg};" ${attrs}><span class="clg-cell-text">${safeTimeText}</span></div>`);
       } else {
         nameCells.push(`<div class="clg-cell clg-name-cell clg-slot-empty"></div>`);
         timeCells.push(`<div class="clg-cell clg-time-cell clg-slot-empty"></div>`);

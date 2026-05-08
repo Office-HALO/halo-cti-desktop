@@ -15,7 +15,7 @@ export function useCallLogs(date) {
 
     const { data, error } = await supabase
       .from('call_logs')
-      .select('*')
+      .select('*, acknowledged_staff:staff!acknowledged_by(id, name), handled_staff:staff!handled_by(id, name)')
       .gte('started_at', dayStart)
       .lte('started_at', dayEnd)
       .order('started_at', { ascending: false });

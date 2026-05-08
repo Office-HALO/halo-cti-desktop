@@ -8,6 +8,10 @@ import OptionGroupEditor from './settings/OptionGroupEditor.jsx';
 import RewardMatrix from './settings/RewardMatrix.jsx';
 import RewardRateSettings from './settings/RewardRateSettings.jsx';
 import CastRewardSettings from './settings/CastRewardSettings.jsx';
+import ShiftAttendanceSettings from './settings/ShiftAttendanceSettings.jsx';
+import ShiftFormSettings from './settings/ShiftFormSettings.jsx';
+import ResvFormSettings from './settings/ResvFormSettings.jsx';
+import HistoryColSettings from './settings/HistoryColSettings.jsx';
 
 const KIND_ICONS = {
   course: 'yen', nomination: 'star', extension: 'yen',
@@ -21,6 +25,10 @@ const MENU = [
   { divider: true, label: 'マスタ' },
   { id: 'stores', label: '店舗', icon: 'grid' },
   { id: 'ranks', label: 'キャストランク', icon: 'star' },
+  { id: 'attendance', label: '出勤状態', icon: 'check' },
+  { id: 'shift_form', label: '出勤情報フォーム', icon: 'note' },
+  { id: 'resv_form', label: '予約フォーム', icon: 'list' },
+  { id: 'history_cols', label: '利用履歴 表示項目', icon: 'history' },
   { divider: true, label: '料金 / 報酬' },
   { id: 'cast_reward', label: 'キャスト報酬', icon: 'star' },
   { id: 'reward_rates', label: 'レート設定', icon: 'yen' },
@@ -39,6 +47,10 @@ export default function Settings({ density, setDensity, pattern, setPattern }) {
     if (active === 'personal') return <PersonalSettings density={density} setDensity={setDensity} pattern={pattern} setPattern={setPattern} />;
     if (active === 'stores') return <StoresSettings />;
     if (active === 'ranks') return <CastRanksSettings />;
+    if (active === 'attendance') return <ShiftAttendanceSettings />;
+    if (active === 'shift_form') return <ShiftFormSettings />;
+    if (active === 'resv_form') return <ResvFormSettings />;
+    if (active === 'history_cols') return <HistoryColSettings />;
     if (active === 'cast_reward') return <CastRewardSettings />;
     if (active === 'reward_rates') return <RewardRateSettings />;
     if (active === 'reward_matrix') return <RewardMatrix />;

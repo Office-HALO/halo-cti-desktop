@@ -17,6 +17,7 @@ import IncomingCallPopup from './overlays/IncomingCallPopup.jsx';
 import Updater from './components/Updater.jsx';
 import CustomerFloat from './overlays/CustomerFloat.jsx';
 import { useRealtimeCalls } from './hooks/useRealtimeCalls.js';
+import { useMastersWarmer } from './hooks/useMastersWarmer.js';
 import { useAuth } from './lib/auth.jsx';
 import { useStoresBoot } from './lib/stores.js';
 import { useAppStore } from './store/state.js';
@@ -37,17 +38,32 @@ const SCREEN_TITLES = {
 export default function App() {
   const { session, staff, loading } = useAuth();
   const setCurrentStaff = useAppStore((s) => s.setCurrentStaff);
+  const allCustomers = useAppStore((s) => s.allCustomers);
+  const currentStoreId = useAppStore((s) => s.currentStoreId);
   const [current, setCurrent] = useState('schedule');
   const [density, setDensity] = useState('compact');
   const [pattern, setPattern] = useState('C');
   const [activeCall, setActiveCall] = useState(null);
+  const [callAnswered, setCallAnswered] = useState(false);
   const [floatCustomer, setFloatCustomer] = useState(null);
 
   useEffect(() => { if (staff) setCurrentStaff(staff); }, [staff?.id]);
   useStoresBoot();
+  useMastersWarmer(); // ログイン後にマスタをプリロード → 予約フォームを即時表示
 
   const handleIncoming = useCallback((call) => setActiveCall(call), []);
-  useRealtimeCalls(handleIncoming);
+  useRealtimeCalls(handleIncoming, currentStoreId);
+
+  const handleDemoCall = useCallback((type) => {
+    if (type === 'known') {
+      const list = allCustomers.filter((c) => c.phone_normalized || c.phone);
+      const c = list[Math.floor(Math.random() * list.length)];
+      if (!c) return;
+      setActiveCall({ callLogId: 'demo', phone: c.phone_normalized || c.phone, customer: c });
+    } else {
+      setActiveCall({ callLogId: 'demo', phone: '09012345678', customer: null });
+    }
+  }, [allCustomers]);
 
   const handleOpenCustomer = useCallback((id, phone) => {
     setFloatCustomer({ id, phone: phone || null });
@@ -82,6 +98,8 @@ export default function App() {
         current={current}
         onNavigate={setCurrent}
         operator={staff.name}
+        onDemoCall={handleDemoCall}
+        callStatus={activeCall ? { answered: callAnswered, staffName: staff.name } : null}
       />
       <main className="main">
         {current === 'schedule' ? (
@@ -111,7 +129,8 @@ export default function App() {
       {activeCall && (
         <IncomingCallPopup
           call={activeCall}
-          onClose={() => setActiveCall(null)}
+          onClose={() => { setActiveCall(null); setCallAnswered(false); }}
+          onAnswer={() => setCallAnswered(true)}
           onOpenCustomer={(id) => handleOpenCustomer(id, activeCall?.phone)}
         />
       )}

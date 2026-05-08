@@ -2,12 +2,14 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import Toast from '../components/Toast.jsx';
+import Combobox from '../components/Combobox.jsx';
 import { useAppStore } from '../store/state.js';
 import { supabase } from '../lib/supabase.js';
 import { showToast } from '../lib/toast.js';
 import { effectivePrice, rewardFor, KIND_ORDER, getRankBrand, calculateGranReward, calculateLaReineReward } from '../lib/pricing.js';
 import { extractRewardRates } from '../screens/settings/RewardRateSettings.jsx';
 import { loadCustomerReservations } from '../hooks/useCustomers.js';
+import { fetchMasters, getCachedMasters, setCachedMasters } from '../lib/mastersFetcher.js';
 import '../styles.css';
 
 const STATUSES = [
@@ -25,10 +27,6 @@ function itemNameToNomType(name = '') {
   if (name.includes('ネット') || /net/i.test(name))    return 'net';
   return 'free';
 }
-const FIRST_MEDIA_OPTIONS = [
-  'HP', '口コミ・紹介', '看板・ポスター', 'チラシ', 'SNS/Instagram',
-  'X(Twitter)', 'ホットペッパー', '店頭', 'その他',
-];
 const COURSE_KIND_ORDER = ['course', 'nomination', 'extension', 'event', 'option', 'discount', 'media', 'other'];
 const AVATAR_HUES = [245, 30, 150, 300, 200, 90, 350, 180];
 
@@ -63,10 +61,22 @@ export default function ReservationStandaloneApp({ rsvKey }) {
   const currentStoreId = useAppStore((s) => s.currentStoreId);
   const stores = useAppStore((s) => s.stores);
   const currentStaff = useAppStore((s) => s.currentStaff);
+  const setCurrentStaff = useAppStore((s) => s.setCurrentStaff);
 
-  const [ready, setReady] = useState(false);
-  const [customer, setCustomer] = useState(null);
-  const [reservation, setReservation] = useState(null);
+  // ── localStorage ペイロードをマウント時に1回だけ同期解析 ──────────────
+  // useState のイニシャライザは初回レンダリング時のみ実行されるため、
+  // 全フォームフィールドをここから初期化してレンダリングサイクルの遅延を排除する
+  const [_initPayload] = useState(() => {
+    try {
+      const raw = localStorage.getItem(`rsv_in_${rsvKey}`);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
+  const _r = _initPayload.reservation;
+
+  const [customer, setCustomer] = useState(_initPayload.customer || null);
+  const [reservation, setReservation] = useState(_r || null);
+  const [allCustomers, setAllCustomers] = useState([]);
 
   const isEdit = !!reservation?.id;
   const cust = customer || reservation?.customer || null;
@@ -89,29 +99,56 @@ export default function ReservationStandaloneApp({ rsvKey }) {
   const [lastSavedAt, setLastSavedAt] = useState(null);
   const [savedDone, setSavedDone] = useState(null);
   const [selections, setSelections] = useState({});
+  const [showCustSearch, setShowCustSearch] = useState(false);
+  const [custSearchQ, setCustSearchQ] = useState('');
+  const [custNgLadyNames, setCustNgLadyNames] = useState([]);
 
-  const [date,            setDate]            = useState(todayISO());
-  const [startTime,       setStartTime]       = useState(() => toHHMM(new Date(Date.now() + 30 * 60 * 1000)));
-  const [ladyId,          setLadyId]          = useState('');
-  const [isTriple,        setIsTriple]        = useState(false);
+  // ── History panel resize ─────────────────────────────────────────────
+  const [historyHeight, setHistoryHeight] = useState(220);
+  const resizeDragRef = useRef(null);
+
+  const handleResizeStart = useCallback((e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = historyHeight;
+    const onMove = (ev) => {
+      const delta = startY - ev.clientY; // drag up → taller history
+      setHistoryHeight(Math.max(80, Math.min(480, startH + delta)));
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [historyHeight]);
+
+  // フォームフィールドを localStorage から直接初期化（余分なレンダリングサイクル不要）
+  const [date,            setDate]            = useState(() => _r?.reserved_date || todayISO());
+  const [startTime,       setStartTime]       = useState(() => _r?.start_time ? trimSec(_r.start_time) : toHHMM(new Date(Date.now() + 30 * 60 * 1000)));
+  const [ladyId,          setLadyId]          = useState(() => _r?.lady_id || '');
+  const [isTriple,        setIsTriple]        = useState(() => _r?.is_triple || false);
   const [onDutyOnly,      setOnDutyOnly]      = useState(false);
-  const [status,          setStatus]          = useState('reserved');
-  const [memo,            setMemo]            = useState('');
-  const [roomNo,          setRoomNo]          = useState('');
-  const [feeAdj,          setFeeAdj]          = useState(0);
-  const [rewardAdj,       setRewardAdj]       = useState(0);
-  const [paymentMethod,   setPaymentMethod]   = useState('cash');
-  const [storeId,         setStoreId]         = useState('');
-  const [nominationType,  setNominationType]  = useState('free');
-  const [receptionMethod, setReceptionMethod] = useState('');
-  const [firstMedia,      setFirstMedia]      = useState('');
-  const [ladyStatus,      setLadyStatus]      = useState('');
-  const [sendDriver,      setSendDriver]      = useState('');
-  const [receiveDriver,   setReceiveDriver]   = useState('');
-  const [receiptNo,       setReceiptNo]       = useState('');
+  const [status,          setStatus]          = useState(() => _r?.status || 'reserved');
+  const [memo,            setMemo]            = useState(() => _r?.memo || '');
+  const [roomNo,          setRoomNo]          = useState(() => _r?.room_no || '');
+  const [feeAdj,          setFeeAdj]          = useState(() => _r?.fee_adjustment ?? 0);
+  const [rewardAdj,       setRewardAdj]       = useState(() => _r?.reward_adjustment ?? 0);
+  const [paymentMethod,   setPaymentMethod]   = useState(() => _r?.payment_method || 'cash');
+  const [storeId,         setStoreId]         = useState(() => _r?.store_id || '');
+  const [nominationType,  setNominationType]  = useState(() => _r?.nomination_type || 'free');
+  const [receptionMethod, setReceptionMethod] = useState(() => _r?.reception_method || '');
+  const [firstMedia,      setFirstMedia]      = useState(() => _r?.first_media || '');
+  const [ladyStatus,      setLadyStatus]      = useState(() => _r?.lady_status || '');
+  const [sendDriver,      setSendDriver]      = useState(() => _r?.send_driver || '');
+  const [receiveDriver,   setReceiveDriver]   = useState(() => _r?.receive_driver || '');
+  const [receiptNo,       setReceiptNo]       = useState(() => _r?.receipt_no || '');
 
   // ── Bootstrap ─────────────────────────────────────────────────────────
+  // フォームフィールドは useState の lazy initializer で初期化済みのため、
+  // ここでは非同期処理（stores フェッチ / staff 取得）のみ実行する
   useEffect(() => {
+    // 店舗リストを取得（ドロップダウン表示用）
     supabase.from('stores').select('*').eq('is_active', true).order('display_order')
       .then(({ data: rows }) => {
         if (rows?.length) {
@@ -122,90 +159,62 @@ export default function ReservationStandaloneApp({ rsvKey }) {
         }
       });
 
-    const raw = localStorage.getItem(`rsv_in_${rsvKey}`);
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        setCustomer(parsed.customer || null);
-        setReservation(parsed.reservation || null);
-        if (parsed.reservation) {
-          const r = parsed.reservation;
-          if (r.reserved_date) setDate(r.reserved_date);
-          if (r.start_time)    setStartTime(trimSec(r.start_time));
-          if (r.lady_id)       setLadyId(r.lady_id);
-          if (r.is_triple)     setIsTriple(r.is_triple);
-          if (r.status)        setStatus(r.status);
-          if (r.memo)          setMemo(r.memo);
-          if (r.room_no)       setRoomNo(r.room_no);
-          if (r.fee_adjustment != null)    setFeeAdj(r.fee_adjustment);
-          if (r.reward_adjustment != null) setRewardAdj(r.reward_adjustment);
-          if (r.payment_method)  setPaymentMethod(r.payment_method);
-          if (r.store_id)        setStoreId(r.store_id);
-          if (r.nomination_type) setNominationType(r.nomination_type);
-          if (r.reception_method) setReceptionMethod(r.reception_method);
-          if (r.first_media)    setFirstMedia(r.first_media);
-          if (r.lady_status)    setLadyStatus(r.lady_status);
-          if (r.send_driver)    setSendDriver(r.send_driver);
-          if (r.receive_driver) setReceiveDriver(r.receive_driver);
-          if (r.receipt_no)     setReceiptNo(r.receipt_no);
-        }
-      } catch { /* ignore */ }
-    }
-    setReady(true);
-  }, [rsvKey]);
+    // サブウィンドウは AuthProvider を通らないため、セッションから staff を取得して
+    // updated_by が null にならないようにする。
+    supabase.auth.getSession().then(async ({ data }) => {
+      const email = data.session?.user?.email;
+      if (!email) return;
+      const { data: staffRow } = await supabase
+        .from('staff')
+        .select('*')
+        .eq('email', email)
+        .eq('is_active', true)
+        .single();
+      if (staffRow) setCurrentStaff(staffRow);
+    });
+  }, [rsvKey, setCurrentStaff]);
 
   // storeId fallback once stores load
   useEffect(() => {
     if (!storeId && currentStoreId) setStoreId(currentStoreId);
   }, [currentStoreId]);
 
+  // ── Load customers for search ──────────────────────────────────────────
+  useEffect(() => {
+    supabase.from('customers').select('id, name, phone_normalized').order('name')
+      .then(({ data }) => { if (data) setAllCustomers(data); });
+  }, []);
+
   // ── Load masters ──────────────────────────────────────────────────────
+  // stale-while-revalidate:
+  //   localStorage キャッシュ（メインウィンドウが useMastersWarmer で事前書き込み済み）
+  //   があれば即座に表示し、バックグラウンドで最新データに更新する。
+  //   localStorage は Tauri の全 WebviewWindow 間で共有されるため、
+  //   メインウィンドウがウォームアップしたキャッシュをサブウィンドウが読める。
   useEffect(() => {
     const sid = storeId || currentStoreId;
     if (!sid) return;
     let cancelled = false;
-    (async () => {
-      const [{ data: groups }, { data: ranks }, { data: storeRow }] = await Promise.all([
-        supabase.from('option_groups').select('*').eq('store_id', sid).order('display_order'),
-        supabase.from('cast_ranks').select('*').eq('store_id', sid).order('display_order'),
-        supabase.from('stores').select('settings').eq('id', sid).single(),
-      ]);
-      if (!cancelled) setStoreRates(extractRewardRates(storeRow?.settings || {}));
-      if (cancelled) return;
-      const groupIds = (groups || []).map((g) => g.id);
-      const { data: allItems } = groupIds.length
-        ? await supabase.from('option_items').select('*').in('group_id', groupIds).eq('is_active', true).order('display_order')
-        : { data: [] };
-      if (cancelled) return;
-      const itemIds = (allItems || []).map((i) => i.id);
-      const { data: rankPriceRows } = itemIds.length
-        ? await supabase.from('option_item_rank_prices').select('item_id, cast_rank_id, price, reward_override').in('item_id', itemIds)
-        : { data: [] };
-      if (cancelled) return;
-      const groupById = {}, itemsByGroup = {}, itemById = {};
-      for (const g of (groups || [])) { groupById[g.id] = g; itemsByGroup[g.id] = []; }
-      for (const item of (allItems || [])) { itemById[item.id] = item; if (itemsByGroup[item.group_id]) itemsByGroup[item.group_id].push(item); }
-      const rankPrices = {}, rankRewardOverrides = {};
-      for (const rp of (rankPriceRows || [])) {
-        if (!rankPrices[rp.item_id]) rankPrices[rp.item_id] = {};
-        rankPrices[rp.item_id][rp.cast_rank_id] = rp.price;
-        if (rp.reward_override != null) {
-          if (!rankRewardOverrides[rp.item_id]) rankRewardOverrides[rp.item_id] = {};
-          rankRewardOverrides[rp.item_id][rp.cast_rank_id] = rp.reward_override;
-        }
-      }
-      const mastersData = { groups: groups || [], groupById, itemsByGroup, itemById, rankPrices, rankRewardOverrides, ranks: ranks || [] };
-      setMasters(mastersData);
-      const initSel = {};
-      for (const g of (groups || [])) initSel[g.id] = g.multi_select ? new Set() : null;
-      for (const si of (reservation?.selected_items || [])) {
-        const g = groupById[si.group_id];
-        if (!g) continue;
-        if (g.multi_select) { if (!(initSel[g.id] instanceof Set)) initSel[g.id] = new Set(); initSel[g.id].add(si.item_id); }
-        else initSel[g.id] = si.item_id;
-      }
-      setSelections(initSel);
-    })();
+
+    // ── キャッシュから即時表示（メインウィンドウがプリロード済みなら初回から一瞬）──
+    const cached = getCachedMasters(sid);
+    if (cached && !cancelled) {
+      setStoreRates(extractRewardRates(cached.storeSettings || {}));
+      setMasters(cached);
+      setSelections(buildInitialSelections(cached, reservation));
+    }
+
+    // ── DB から最新データを取得してキャッシュ更新（バックグラウンド）──────
+    fetchMasters(sid)
+      .then((mastersData) => {
+        if (cancelled) return;
+        setCachedMasters(sid, mastersData);
+        setStoreRates(extractRewardRates(mastersData.storeSettings || {}));
+        setMasters(mastersData);
+        setSelections(buildInitialSelections(mastersData, reservation));
+      })
+      .catch(() => {});
+
     return () => { cancelled = true; };
   }, [storeId, currentStoreId]);
 
@@ -221,11 +230,19 @@ export default function ReservationStandaloneApp({ rsvKey }) {
     return () => { cancelled = true; };
   }, [storeId, currentStoreId]);
 
+  // ── Load customer NG ladies ───────────────────────────────────────────
+  useEffect(() => {
+    const cid = cust?.id || reservation?.customer_id;
+    if (!cid) { setCustNgLadyNames([]); return; }
+    supabase.from('customer_ng_ladies').select('lady_name').eq('customer_id', cid)
+      .then(({ data }) => setCustNgLadyNames((data || []).map((r) => r.lady_name)));
+  }, [cust?.id, reservation?.customer_id]);
+
   // ── Load history ──────────────────────────────────────────────────────
   useEffect(() => {
     const cid = cust?.id || reservation?.customer_id;
     if (!cid) return;
-    loadCustomerReservations(cid).then(setHistory);
+    loadCustomerReservations(cid).then((res) => setHistory(res?.data ?? res ?? []));
   }, [cust?.id, reservation?.customer_id]);
 
   // ── Lady → cast rank / reward rate ───────────────────────────────────
@@ -460,6 +477,24 @@ export default function ReservationStandaloneApp({ rsvKey }) {
 
   // ── Save ──────────────────────────────────────────────────────────────
   const save = useCallback(async () => {
+    // ── blank_policy validation ──────────────────────────────────────────
+    // 現在のキャストブランドを取得（ブランド非一致グループはスキップ）
+    const castBrand = getRankBrand(
+      masters?.ranks.find(r => r.id === ladyCastRankId)?.code || ''
+    );
+    for (const g of (masters?.groups || [])) {
+      if (g.meta?.blank_policy !== 'required') continue;
+      // ブランド付きグループ（nomination/course/extension）は
+      // 現在のキャストブランドと一致する場合のみ検証する
+      const groupBrand = getGroupBrand(g.label);
+      if (groupBrand && castBrand && groupBrand !== castBrand) continue;
+      const sel = selections[g.id];
+      const isEmpty = !sel || (sel instanceof Set && sel.size === 0);
+      if (isEmpty) {
+        showToast('error', `「${g.label}」は必須項目です`);
+        return;
+      }
+    }
     setLoading(true);
     const courseGroup = masters?.groups.find((g) => g.kind === 'course');
     const courseItemId = courseGroup ? (selections[courseGroup.id] || null) : null;
@@ -491,6 +526,8 @@ export default function ReservationStandaloneApp({ rsvKey }) {
       send_driver:    sendDriver    || null,
       receive_driver: receiveDriver || null,
       receipt_no:     receiptNo     || null,
+      nomination_type:  nominationType  || null,
+      reception_method: receptionMethod || null,
       updated_by:     currentStaff?.id || null,
     };
     let resp;
@@ -501,7 +538,7 @@ export default function ReservationStandaloneApp({ rsvKey }) {
     setLastSavedAt(new Date());
     handleSaved(resp.data);  // 親ウィンドウに保存データを通知
     setSavedDone(resp.data); // ダイアログ表示
-  }, [masters, selections, cust, reservation, storeId, currentStoreId, ladyId, date, startTime, endTime, totalDuration, status, roomNo, memo, totalAmount, totalReward, lineItems, feeAdj, rewardAdj, paymentMethod, isTriple, isFirstMeet, firstMedia, ladyStatus, sendDriver, receiveDriver, receiptNo, currentStaff, isEdit]);
+  }, [masters, selections, ladyCastRankId, cust, reservation, storeId, currentStoreId, ladyId, date, startTime, endTime, totalDuration, status, roomNo, memo, totalAmount, totalReward, lineItems, feeAdj, rewardAdj, paymentMethod, isTriple, isFirstMeet, firstMedia, ladyStatus, sendDriver, receiveDriver, receiptNo, nominationType, receptionMethod, currentStaff, isEdit]);
 
   useEffect(() => { saveRef.current = save; }, [save]);
 
@@ -519,6 +556,27 @@ export default function ReservationStandaloneApp({ rsvKey }) {
   // ── Computed ──────────────────────────────────────────────────────────
   const groupsByKind = {};
   if (masters) for (const g of masters.groups) { if (!groupsByKind[g.kind]) groupsByKind[g.kind] = []; groupsByKind[g.kind].push(g); }
+  const mediaItems  = (groupsByKind['media']  || []).flatMap(g => masters?.itemsByGroup[g.id] || []);
+  const driverItems = (groupsByKind['driver'] || []).flatMap(g => masters?.itemsByGroup[g.id] || []);
+
+  // 旧データのヒント: selected_items から kind別に旧アイテム名を取り出す（未選択時の参照用）
+  const oldSelByKind = useMemo(() => {
+    const map = {};
+    for (const si of (reservation?.selected_items || [])) {
+      if (!si.name) continue;
+      if (!map[si.kind]) map[si.kind] = [];
+      map[si.kind].push(si.name);
+    }
+    return map;
+  }, [reservation]);
+  // 現在のselections内で指定kindが何も選ばれていないか
+  const hasSelection = (kind) => {
+    if (!masters) return false;
+    return (groupsByKind[kind] || []).some(g => {
+      const s = selections[g.id];
+      return s && !(s instanceof Set && s.size === 0);
+    });
+  };
 
   const courseAmt    = lineItems.filter(l => l.kind === 'course').reduce((s, l) => s + l.amount, 0);
   const extAmt       = lineItems.filter(l => l.kind === 'extension').reduce((s, l) => s + l.amount, 0);
@@ -559,11 +617,7 @@ export default function ReservationStandaloneApp({ rsvKey }) {
     let groups;
     if (firstOnly) {
       if (castBrand) {
-        // キャストブランドに合うグループを優先。なければ先頭にフォールバック
-        const matched = allGroups.filter(g => {
-          const gb = getGroupBrand(g.label);
-          return !gb || gb === castBrand;
-        });
+        const matched = allGroups.filter(g => { const gb = getGroupBrand(g.label); return !gb || gb === castBrand; });
         groups = matched.length ? matched.slice(0, 1) : allGroups.slice(0, 1);
       } else {
         groups = allGroups.slice(0, 1);
@@ -578,6 +632,47 @@ export default function ReservationStandaloneApp({ rsvKey }) {
     return groups.map(g => {
       const items = masters.itemsByGroup[g.id] || [];
       const sel = selections[g.id];
+      const dt = g.meta?.display_type ?? 'select';
+      const isMulti = g.multi_select || dt === 'multi_select' || dt === 'multi_select_count';
+
+      if (dt === 'select_editable') {
+        return (
+          <Combobox
+            key={g.id}
+            items={items}
+            value={typeof sel === 'string' ? sel : null}
+            onChange={id => setSelections(prev => ({ ...prev, [g.id]: id }))}
+            placeholder={placeholder || '— なし —'}
+            className={ctrl}
+            style={{ width: '100%' }}
+          />
+        );
+      }
+
+      if (isMulti) {
+        return (
+          <div key={g.id} className="rf-chips" style={{ flex: 1 }}>
+            {items.map(item => {
+              const checked = sel instanceof Set ? sel.has(item.id) : false;
+              return (
+                <label key={item.id} className={`rf-chip${checked ? ' on' : ''}`}>
+                  <input type="checkbox" checked={checked}
+                    onChange={() => {
+                      setSelections(prev => {
+                        const s = new Set(prev[g.id] instanceof Set ? prev[g.id] : []);
+                        s.has(item.id) ? s.delete(item.id) : s.add(item.id);
+                        return { ...prev, [g.id]: s };
+                      });
+                    }} />
+                  {item.name}
+                </label>
+              );
+            })}
+          </div>
+        );
+      }
+
+      // default: select
       return (
         <select key={g.id} className={ctrl}
           value={typeof sel === 'string' ? sel : ''}
@@ -588,8 +683,6 @@ export default function ReservationStandaloneApp({ rsvKey }) {
       );
     });
   };
-
-  if (!ready) return null;
 
   const hue = avatarHue(cust?.name);
 
@@ -636,7 +729,7 @@ export default function ReservationStandaloneApp({ rsvKey }) {
 
           {/* ── LEFT: Customer ── */}
           <aside className="fw-left">
-            <div className="fw-cust-hero">
+            <div className="fw-cust-hero" onClick={() => setShowCustSearch(true)} style={{ cursor: 'pointer' }} title="クリックして顧客を検索">
               <div className="fw-portrait" style={{ background: `linear-gradient(135deg, oklch(0.55 0.16 ${hue}), oklch(0.40 0.20 ${hue}))` }}>
                 {cust?.name?.[0] || '?'}
               </div>
@@ -736,7 +829,26 @@ export default function ReservationStandaloneApp({ rsvKey }) {
               {/* ── Col MAIN: 2-column sub-grid ── */}
               <div className="ff-col ff-col-main">
 
-                {/* 店舗 | 新規媒体 */}
+                {/* 顧客検索 */}
+                <div className="ff-field">
+                  <label className="ff-label">顧客</label>
+                  <Combobox
+                    items={allCustomers.map(c => ({
+                      id: c.id,
+                      name: [c.name, c.phone_normalized].filter(Boolean).join('　'),
+                    }))}
+                    value={customer?.id ?? null}
+                    onChange={(id) => {
+                      const found = allCustomers.find(c => c.id === id) ?? null;
+                      setCustomer(found);
+                    }}
+                    placeholder="名前・電話番号で検索…"
+                    className="ff-ctrl"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+
+              {/* 店舗 | 新規媒体 */}
                 <div className="ff-row2">
                   <div className="ff-field">
                     <label className="ff-label">店舗 <span className="ff-req">※</span></label>
@@ -750,7 +862,7 @@ export default function ReservationStandaloneApp({ rsvKey }) {
                     <label className="ff-label">新規 媒体</label>
                     <select className="ff-ctrl" value={firstMedia} onChange={e => setFirstMedia(e.target.value)}>
                       <option value="">—</option>
-                      {FIRST_MEDIA_OPTIONS.map(m => <option key={m} value={m}>{m}</option>)}
+                      {mediaItems.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                     </select>
                   </div>
                 </div>
@@ -805,12 +917,14 @@ export default function ReservationStandaloneApp({ rsvKey }) {
                         出勤のみ
                       </label>
                     </div>
-                    <select className="ff-ctrl" value={ladyId} onChange={e => setLadyId(e.target.value)}>
-                      <option value="">— フリー —</option>
-                      {(onDutyOnly ? ladies.filter(l => l.is_on_duty) : ladies).map(l =>
-                        <option key={l.id} value={l.id}>{l.display_name || l.name}</option>
-                      )}
-                    </select>
+                    <Combobox
+                      items={(onDutyOnly ? ladies.filter(l => l.is_on_duty) : ladies).map(l => ({ id: l.id, name: l.display_name || l.name, disabled: custNgLadyNames.includes(l.display_name || l.name) }))}
+                      value={ladyId || null}
+                      onChange={id => setLadyId(id || '')}
+                      placeholder="— フリー —"
+                      className="ff-ctrl"
+                      style={{ width: '100%' }}
+                    />
                     {isFirstMeet !== null && (
                       <span className={`ff-meet ${isFirstMeet ? 'first' : 'repeat'}`}>
                         {isFirstMeet ? '初回' : 'リピーター'}
@@ -825,6 +939,11 @@ export default function ReservationStandaloneApp({ rsvKey }) {
                       setSelections={setSelections}
                       brand={getRankBrand(masters?.ranks.find(r => r.id === ladyCastRankId)?.code || '')}
                     />
+                    {isEdit && !hasSelection('nomination') && oldSelByKind['nomination']?.length > 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, display: 'block' }}>
+                        旧: {oldSelByKind['nomination'].join(', ')}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -833,10 +952,20 @@ export default function ReservationStandaloneApp({ rsvKey }) {
                   <div className="ff-field">
                     <label className="ff-label">コース <span className="ff-req">※</span></label>
                     <GroupSelect kind="course" placeholder="— なし —" cls="ff-ctrl" firstOnly />
+                    {isEdit && !hasSelection('course') && (oldSelByKind['course']?.length > 0 || reservation?.course) && (
+                      <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, display: 'block' }}>
+                        旧: {oldSelByKind['course']?.[0] || reservation?.course}
+                      </span>
+                    )}
                   </div>
                   <div className="ff-field">
                     <label className="ff-label">延長</label>
                     <GroupSelect kind="extension" placeholder="— なし —" cls="ff-ctrl" firstOnly />
+                    {isEdit && !hasSelection('extension') && oldSelByKind['extension']?.length > 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, display: 'block' }}>
+                        旧: {oldSelByKind['extension'].join(', ')}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -845,10 +974,20 @@ export default function ReservationStandaloneApp({ rsvKey }) {
                   <div className="ff-field">
                     <label className="ff-label">交通費 <span className="ff-req">※</span></label>
                     <GroupSelect kind="transport" placeholder="— なし —" cls="ff-ctrl" />
+                    {isEdit && !hasSelection('transport') && oldSelByKind['transport']?.length > 0 && (
+                      <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, display: 'block' }}>
+                        旧: {oldSelByKind['transport'].join(', ')}
+                      </span>
+                    )}
                   </div>
                   <div className="ff-field">
                     <label className="ff-label">ホテル / 場所 <span className="ff-req">※</span></label>
                     <GroupSelect kind="hotel" placeholder="— なし —" cls="ff-ctrl" />
+                    {isEdit && !hasSelection('hotel') && (oldSelByKind['hotel']?.length > 0 || reservation?.hotel) && (
+                      <span style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, display: 'block' }}>
+                        旧: {oldSelByKind['hotel']?.[0] || reservation?.hotel}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -863,62 +1002,57 @@ export default function ReservationStandaloneApp({ rsvKey }) {
               {/* ── Col C: イベント / オプション / 割引 ── */}
               <div className="ff-col ff-col-c">
 
-                <div className="ff-field">
-                  <label className="ff-label">イベント</label>
-                  <div className="ff-inline-checks">
-                    {masters && (groupsByKind['event'] || []).flatMap(g => {
-                      const items = masters.itemsByGroup[g.id] || [];
-                      const sel = selections[g.id];
-                      return items.map(item => {
-                        const checked = g.multi_select ? (sel instanceof Set && sel.has(item.id)) : sel === item.id;
-                        return (
-                          <label key={item.id} className={`ff-chk${checked ? ' on' : ''}`}>
-                            <input type="checkbox" checked={checked} onChange={() => selectItem(g.id, item.id, g.multi_select)} />
-                            {item.name}
-                          </label>
-                        );
-                      });
-                    })}
-                  </div>
-                </div>
-
-                <div className="ff-field">
-                  <label className="ff-label">オプション</label>
-                  <div className="ff-inline-checks">
-                    {masters && (groupsByKind['option'] || []).flatMap(g => {
-                      const items = masters.itemsByGroup[g.id] || [];
-                      const sel = selections[g.id];
-                      return items.map(item => {
-                        const checked = g.multi_select ? (sel instanceof Set && sel.has(item.id)) : sel === item.id;
-                        return (
-                          <label key={item.id} className={`ff-chk${checked ? ' on' : ''}`}>
-                            <input type="checkbox" checked={checked} onChange={() => selectItem(g.id, item.id, g.multi_select)} />
-                            {item.name}
-                          </label>
-                        );
-                      });
-                    })}
-                  </div>
-                </div>
-
-                <div className="ff-field">
-                  <label className="ff-label">割引</label>
-                  <div className="ff-inline-checks">
-                    {masters && (groupsByKind['discount'] || []).flatMap(g => {
-                      const items = masters.itemsByGroup[g.id] || [];
-                      const sel = selections[g.id];
-                      return items.map(item => {
-                        const checked = g.multi_select ? (sel instanceof Set && sel.has(item.id)) : sel === item.id;
-                        return (
-                          <label key={item.id} className={`ff-chk${checked ? ' on' : ''}`}>
-                            <input type="checkbox" checked={checked} onChange={() => selectItem(g.id, item.id, g.multi_select)} />
-                            {item.name}
-                          </label>
-                        );
-                      });
-                    })}
-                  </div>
-                </div>
+                {['event', 'option', 'discount'].map(kindKey => {
+                  const kindLabel = { event: 'イベント', option: 'オプション', discount: '割引' }[kindKey];
+                  const kindGroups = masters ? (groupsByKind[kindKey] || []) : [];
+                  if (!masters || !kindGroups.length) return (
+                    <div key={kindKey} className="ff-field">
+                      <label className="ff-label">{kindLabel}</label>
+                      <div className="ff-inline-checks" style={{ color: 'var(--muted)', fontSize: 12 }}>—</div>
+                    </div>
+                  );
+                  return kindGroups.map(g => {
+                    const items = masters.itemsByGroup[g.id] || [];
+                    const sel = selections[g.id];
+                    const dt = g.meta?.display_type ?? 'select';
+                    const isMulti = g.multi_select || dt === 'multi_select' || dt === 'multi_select_count';
+                    const groupLabel = kindGroups.length > 1 ? g.label : kindLabel;
+                    return (
+                      <div key={g.id} className="ff-field">
+                        <label className="ff-label">{groupLabel}</label>
+                        {(dt === 'select' || (!isMulti && dt !== 'select_editable')) ? (
+                          <select className="ff-ctrl"
+                            value={typeof sel === 'string' ? sel : ''}
+                            onChange={e => setSelections(prev => ({ ...prev, [g.id]: e.target.value || null }))}>
+                            <option value="">— なし —</option>
+                            {items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                          </select>
+                        ) : dt === 'select_editable' ? (
+                          <Combobox
+                            items={items}
+                            value={typeof sel === 'string' ? sel : null}
+                            onChange={id => setSelections(prev => ({ ...prev, [g.id]: id }))}
+                            placeholder="— なし —"
+                            className="ff-ctrl"
+                            style={{ width: '100%' }}
+                          />
+                        ) : (
+                          <div className="ff-inline-checks">
+                            {items.map(item => {
+                              const checked = sel instanceof Set ? sel.has(item.id) : sel === item.id;
+                              return (
+                                <label key={item.id} className={`ff-chk${checked ? ' on' : ''}`}>
+                                  <input type="checkbox" checked={checked} onChange={() => selectItem(g.id, item.id, isMulti)} />
+                                  {item.name}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  });
+                })}
 
                 <div className="ff-field">
                   <label className="ff-label ff-label-ghost">3P</label>
@@ -1043,8 +1177,13 @@ export default function ReservationStandaloneApp({ rsvKey }) {
           </aside>
         </div>
 
+        {/* ── Resize handle ── */}
+        <div className="fw-resize-handle" onMouseDown={handleResizeStart} ref={resizeDragRef}>
+          <div className="fw-resize-grip" />
+        </div>
+
         {/* ── History strip ── */}
-        <div className="fw-history">
+        <div className="fw-history" style={{ height: historyHeight }}>
           <div className="fw-hist-h">
             <span className="fw-hist-ttl">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1133,6 +1272,17 @@ export default function ReservationStandaloneApp({ rsvKey }) {
           </button>
         </div>
 
+        {/* ── 顧客検索オーバーレイ ── */}
+        {showCustSearch && (
+          <CustomerSearchOverlay
+            allCustomers={allCustomers}
+            query={custSearchQ}
+            setQuery={setCustSearchQ}
+            onSelect={(c) => { setCustomer(c); setShowCustSearch(false); setCustSearchQ(''); }}
+            onClose={() => { setShowCustSearch(false); setCustSearchQ(''); }}
+          />
+        )}
+
         {/* ── 保存完了オーバーレイ ── */}
         {savedDone && (
           <div className="fw-saved-overlay">
@@ -1153,6 +1303,130 @@ export default function ReservationStandaloneApp({ rsvKey }) {
       <Toast />
     </div>
   );
+}
+
+function CustomerSearchOverlay({ allCustomers, query, setQuery, onSelect, onClose }) {
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const normalize = (s) => (s || '').replace(/[-\s]/g, '').toLowerCase();
+  const q = normalize(query);
+  const filtered = q.length === 0 ? allCustomers.slice(0, 50) : allCustomers.filter(c =>
+    normalize(c.name).includes(q) ||
+    normalize(c.kana).includes(q) ||
+    normalize(c.phone_normalized).includes(q) ||
+    normalize(c.phone).includes(q)
+  ).slice(0, 100);
+
+  return (
+    <div
+      style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: 'var(--surface)', borderRadius: 12, width: 520, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.4)', overflow: 'hidden' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--muted)', flexShrink: 0 }}>
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="名前・フリガナ・電話番号で検索..."
+            style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 14, color: 'var(--text)', fontFamily: 'inherit' }}
+          />
+          <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--muted)', fontSize: 18, lineHeight: 1, padding: '0 2px' }}>×</button>
+        </div>
+
+        {/* Results */}
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>該当する顧客が見つかりません</div>
+          ) : filtered.map((c) => (
+            <div
+              key={c.id}
+              onClick={() => onSelect(c)}
+              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', cursor: 'pointer', borderBottom: '1px solid var(--line-2)' }}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--halo-50)'}
+              onMouseLeave={(e) => e.currentTarget.style.background = ''}
+            >
+              <div style={{
+                width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                background: `linear-gradient(135deg, oklch(0.55 0.16 ${avatarHue(c.name)}), oklch(0.40 0.20 ${avatarHue(c.name)}))`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fff', fontWeight: 700, fontSize: 15,
+              }}>
+                {c.name?.[0] || '?'}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)' }}>{c.name}</div>
+                {c.kana && <div style={{ fontSize: 11, color: 'var(--muted)' }}>{c.kana}</div>}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'monospace', flexShrink: 0 }}>
+                {c.phone_normalized || c.phone || ''}
+              </div>
+              {c.customer_no && (
+                <div style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>V{String(c.customer_no).padStart(5,'0')}</div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--muted)', display: 'flex', justifyContent: 'space-between' }}>
+          <span>{filtered.length}件表示</span>
+          <span>Esc で閉じる</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * masters データと予約データから初期 selections を構築する。
+ * masters useEffect 内でキャッシュ読み込み時とDB取得時の両方で使用する。
+ */
+function buildInitialSelections(masters, reservation) {
+  const initSel = {};
+  for (const g of (masters.groups || [])) {
+    const dt = g.meta?.display_type;
+    const isMulti = g.multi_select || dt === 'multi_select' || dt === 'multi_select_count';
+    initSel[g.id] = isMulti ? new Set() : null;
+  }
+  for (const si of (reservation?.selected_items || [])) {
+    // group_id / item_id がある場合はそのまま使う（新形式）
+    let g = masters.groupById?.[si.group_id];
+    let itemId = si.item_id;
+
+    // group_id or item_id が null の場合は名前＋kindでマッチング（旧形式フォールバック）
+    if (!g || !itemId) {
+      const kindGroups = (masters.groups || []).filter(grp => grp.kind === si.kind);
+      for (const grp of kindGroups) {
+        const matched = (masters.itemsByGroup?.[grp.id] || []).find(item => item.name === si.name);
+        if (matched) { g = grp; itemId = matched.id; break; }
+      }
+    }
+
+    if (!g || !itemId) continue;
+    const dt2 = g.meta?.display_type;
+    const isMulti2 = g.multi_select || dt2 === 'multi_select' || dt2 === 'multi_select_count';
+    if (isMulti2) {
+      if (!(initSel[g.id] instanceof Set)) initSel[g.id] = new Set();
+      initSel[g.id].add(itemId);
+    } else {
+      initSel[g.id] = itemId;
+    }
+  }
+  return initSel;
 }
 
 /**

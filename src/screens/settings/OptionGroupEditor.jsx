@@ -31,6 +31,46 @@ export default function OptionGroupEditor({ kind }) {
   // Item editor modal
   const [itemModal, setItemModal] = useState(null);
 
+  // Sort state for items table
+  const [sortKey, setSortKey] = useState(null); // 'name' | 'price' | 'reward'
+  const [sortDir, setSortDir] = useState('asc');
+
+  const cycleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const sortedItems = (items) => {
+    if (!sortKey) return items;
+    return [...items].sort((a, b) => {
+      let va, vb;
+      if (sortKey === 'name') {
+        va = a.name || ''; vb = b.name || '';
+        return sortDir === 'asc' ? va.localeCompare(vb, 'ja') : vb.localeCompare(va, 'ja');
+      }
+      if (sortKey === 'price') {
+        va = a.price_flat ?? 0; vb = b.price_flat ?? 0;
+      }
+      if (sortKey === 'reward') {
+        const rewardNum = (item) => {
+          switch (item.reward_mode) {
+            case 'percent': return item.reward_percent ?? 0;
+            case 'flat': return item.reward_flat ?? 0;
+            case 'first_vs_repeat': return item.reward_first ?? 0;
+            case 'percent_first_vs_repeat': return item.reward_percent_first ?? 0;
+            default: return 0;
+          }
+        };
+        va = rewardNum(a); vb = rewardNum(b);
+      }
+      return sortDir === 'asc' ? va - vb : vb - va;
+    });
+  };
+
   // Inline delete confirmation (avoids browser confirm() which Tauri blocks)
   const [pendingDeleteGroup, setPendingDeleteGroup] = useState(null);
   const [pendingDeleteItem, setPendingDeleteItem] = useState(null);
@@ -99,12 +139,22 @@ export default function OptionGroupEditor({ kind }) {
       required: false,
       triple_multiplier: '2.0',
       display_order: String(groups.length),
+      show_in_context_menu: 'show',
+      blank_policy: 'allow',
+      display_type: 'select',
     });
     setGroupModal('new');
   };
 
   const openGroupEdit = (g) => {
-    setGroupForm({ ...g, triple_multiplier: String(g.triple_multiplier ?? '2.0'), display_order: String(g.display_order) });
+    setGroupForm({
+      ...g,
+      triple_multiplier: String(g.triple_multiplier ?? '2.0'),
+      display_order: String(g.display_order),
+      show_in_context_menu: g.meta?.show_in_context_menu ?? 'show',
+      blank_policy: g.meta?.blank_policy ?? 'allow',
+      display_type: g.meta?.display_type ?? 'select',
+    });
     setGroupModal(g);
   };
 
@@ -119,6 +169,11 @@ export default function OptionGroupEditor({ kind }) {
       multi_select: !!groupForm.multi_select,
       triple_multiplier: parseFloat(groupForm.triple_multiplier) || 2.0,
       display_order: Number(groupForm.display_order) || 0,
+      meta: {
+        show_in_context_menu: groupForm.show_in_context_menu ?? 'show',
+        blank_policy: groupForm.blank_policy ?? 'allow',
+        display_type: groupForm.display_type ?? 'select',
+      },
     };
     let error;
     if (groupModal === 'new') {
@@ -300,14 +355,32 @@ export default function OptionGroupEditor({ kind }) {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                     <thead>
                       <tr style={{ background: 'var(--bg-subtle)' }}>
-                        <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--muted)', fontWeight: 600 }}>名前</th>
-                        {showPrice && <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--muted)', fontWeight: 600 }}>価格</th>}
-                        <th style={{ textAlign: 'left', padding: '6px 10px', color: 'var(--muted)', fontWeight: 600 }}>報酬</th>
+                        {[
+                          { key: 'name', label: '名前', show: true },
+                          { key: 'price', label: '価格', show: showPrice },
+                          { key: 'reward', label: '報酬', show: true },
+                        ].filter(c => c.show).map(({ key, label }) => (
+                          <th
+                            key={key}
+                            onClick={() => cycleSort(key)}
+                            style={{
+                              textAlign: 'left', padding: '6px 10px',
+                              color: sortKey === key ? 'var(--text)' : 'var(--muted)',
+                              fontWeight: 600, cursor: 'pointer', userSelect: 'none',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {label}
+                            <span style={{ marginLeft: 4, fontSize: 10, opacity: sortKey === key ? 1 : 0.3 }}>
+                              {sortKey === key ? (sortDir === 'asc' ? '▲' : '▼') : '▲'}
+                            </span>
+                          </th>
+                        ))}
                         <th style={{ width: 80 }} />
                       </tr>
                     </thead>
                     <tbody>
-                      {items.map((item) => (
+                      {sortedItems(items).map((item) => (
                         <tr key={item.id} style={{ borderTop: '1px solid var(--line-2)' }}>
                           <td style={{ padding: '8px 10px' }}>
                             {item.name}
@@ -358,8 +431,56 @@ export default function OptionGroupEditor({ kind }) {
               <button className="btn sm ghost" onClick={closeGroupModal}><Icon name="close" size={14} /></button>
             </div>
             <div style={{ padding: 16, display: 'grid', gap: 12 }}>
-              <FormRow label="ラベル">
+              <FormRow label="ラベル名">
                 <input style={INP} value={groupForm.label || ''} onChange={(e) => setGF('label', e.target.value)} />
+              </FormRow>
+              <FormRow label="種別">
+                <span style={{ fontSize: 13, color: 'var(--text)', padding: '6px 0' }}>{kindDef.label || kind}</span>
+              </FormRow>
+              <FormRow label="表示">
+                <select
+                  style={{ ...INP, width: 'auto' }}
+                  value={groupForm.display_type ?? 'select'}
+                  onChange={(e) => setGF('display_type', e.target.value)}
+                >
+                  <optgroup label="選択系">
+                    <option value="select">選択</option>
+                    <option value="select_editable">選択（編集可能）</option>
+                    <option value="multi_select">複数選択</option>
+                    <option value="multi_select_count" disabled>複数選択（数あり）※準備中</option>
+                  </optgroup>
+                  <optgroup label="入力系（準備中）">
+                    <option value="text" disabled>テキスト</option>
+                    <option value="date" disabled>日付</option>
+                    <option value="time" disabled>時間</option>
+                    <option value="datetime" disabled>日時</option>
+                    <option value="number" disabled>数値</option>
+                    <option value="number_pos" disabled>数値（0以上）</option>
+                    <option value="number_price" disabled>数値（料金）</option>
+                    <option value="number_reward" disabled>数値（報酬）</option>
+                  </optgroup>
+                  <optgroup label="マスター連携（準備中）">
+                    <option value="select_lady" disabled>選択（女子）</option>
+                    <option value="select_lady_working" disabled>選択（女子出勤）</option>
+                    <option value="select_staff" disabled>選択（スタッフ）</option>
+                    <option value="select_driver" disabled>選択（ドライバー）</option>
+                    <option value="select_staff_driver" disabled>選択（スタッフ・ドライバー）</option>
+                    <option value="select_media" disabled>選択（媒体）</option>
+                  </optgroup>
+                </select>
+              </FormRow>
+              <FormRow label="右クリック画面で表示">
+                <select style={{ ...INP, width: 'auto' }} value={groupForm.show_in_context_menu ?? 'show'} onChange={(e) => setGF('show_in_context_menu', e.target.value)}>
+                  <option value="show">表示</option>
+                  <option value="hide">非表示</option>
+                </select>
+              </FormRow>
+              <FormRow label="空白選択">
+                <select style={{ ...INP, width: 'auto' }} value={groupForm.blank_policy ?? 'allow'} onChange={(e) => setGF('blank_policy', e.target.value)}>
+                  <option value="allow">空白を許可する</option>
+                  <option value="required">空白を許可しない（入力必須）</option>
+                  <option value="none">空白を使用しない</option>
+                </select>
               </FormRow>
               {showMultiSelect && (
                 <FormRow label="複数選択">

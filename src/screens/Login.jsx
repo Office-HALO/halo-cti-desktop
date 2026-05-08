@@ -42,13 +42,13 @@ export default function Login() {
         </div>
         <div className="login-status mono">
           <div>
-            <span className="dot ok" /> Database · online
+            <span className="dot" style={{ background: 'var(--muted)' }} /> Database
           </div>
           <div>
-            <span className="dot ok" /> Supabase · 接続済
+            <span className="dot" style={{ background: 'var(--muted)' }} /> Supabase
           </div>
         </div>
-        <div className="login-ver mono">v 0.1.0 · HALO CTI Desktop</div>
+        <div className="login-ver mono">v 0.2.5 · HALO CTI Desktop</div>
       </div>
 
       <div className="login-form-wrap">

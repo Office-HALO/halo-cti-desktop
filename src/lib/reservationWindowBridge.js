@@ -55,12 +55,13 @@ export async function openReservationWindow({ customer, reservation, onSaved, on
     win = new WebviewWindow(`rsv_win_${key}`, {
       url: `/?rsvKey=${key}`,
       title: customer ? `予約入力 — ${customer.name}` : '予約入力',
-      width: 1400,
-      height: 760,
-      minWidth: 1100,
+      width: 1200,
+      height: 740,
+      minWidth: 900,
       minHeight: 600,
       resizable: true,
       decorations: true,
+      center: true,
     });
     win.once('tauri://destroyed', cleanup);
     win.once('tauri://error', (e) => {

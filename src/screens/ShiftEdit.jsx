@@ -152,30 +152,68 @@ export default function ShiftEdit() {
   );
 }
 
+const TIME_INP = { padding: '5px 7px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--bg)', color: 'var(--text)' };
+
+const END_BADGE_STYLE = {
+  agari:     { bg: 'oklch(0.90 0.06 15)',  fg: 'oklch(0.45 0.14 15)',  label: 'Up' },
+  reception: { bg: 'oklch(0.88 0.06 220)', fg: 'oklch(0.38 0.12 220)', label: '受' },
+};
+
 function ShiftRow({ shift, onUpdate, onRemove }) {
   const lady = shift.ladies || {};
   const name = lady.display_name || lady.name || '—';
   const [start, setStart] = useState(trim(shift.start_time));
-  const [end, setEnd] = useState(trim(shift.end_time));
+  const [end,   setEnd]   = useState(trim(shift.end_time));
+  const [endBadge, setEndBadge] = useState(shift.end_badge || 'agari');
   const [confirmDel, setConfirmDel] = useState(false);
 
   const dirty = start !== trim(shift.start_time) || end !== trim(shift.end_time);
 
+  const handleSave = () => onUpdate({
+    start_time: start ? start + ':00' : null,
+    end_time:   end   ? end   + ':00' : null,
+  });
+
+  const toggleBadge = () => {
+    const next = endBadge === 'agari' ? 'reception' : 'agari';
+    setEndBadge(next);
+    onUpdate({ end_badge: next });
+  };
+
+  const bs = END_BADGE_STYLE[endBadge] || END_BADGE_STYLE.agari;
+
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 12,
-      padding: 10, background: 'var(--surface)',
+      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+      padding: '10px 12px', background: 'var(--surface)',
       border: '1px solid var(--border)', borderRadius: 8,
     }}>
       <Avatar name={name} size={36} hue={hashHue(name)} />
-      <div style={{ flex: '0 0 200px', minWidth: 0 }}>
+      <div style={{ flex: '0 0 180px', minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: 14 }}>{name}</div>
       </div>
-      <input type="time" value={start} onChange={(e) => setStart(e.target.value)} style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)' }} />
-      <span style={{ color: 'var(--muted)' }}>〜</span>
-      <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)' }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>シフト</span>
+        <input type="time" value={start} onChange={(e) => setStart(e.target.value)} style={TIME_INP} />
+        <span style={{ color: 'var(--muted)' }}>〜</span>
+        <input type="time" value={end} onChange={(e) => setEnd(e.target.value)} style={TIME_INP} />
+        <button
+          onClick={toggleBadge}
+          title="クリックで切替"
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 28, height: 28, borderRadius: '50%', border: 'none', cursor: 'pointer',
+            background: bs.bg, color: bs.fg, fontSize: 10, fontWeight: 800,
+            boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+          }}
+        >
+          {bs.label}
+        </button>
+      </div>
+
       {dirty && (
-        <button className="btn sm primary" onClick={() => onUpdate({ start_time: start + ':00', end_time: end + ':00' })}>
+        <button className="btn sm primary" onClick={handleSave}>
           <Icon name="check" size={12} />保存
         </button>
       )}

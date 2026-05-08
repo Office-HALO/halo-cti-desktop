@@ -1,6 +1,32 @@
 /* HALO CTI — Design System */
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* 源ノ角ゴシック — ローカルインストール済みなら優先使用、なければ Noto Sans JP にフォールバック */
+@font-face {
+  font-family: 'HaloJP';
+  font-weight: 400;
+  src: local('Source Han Sans JP'), local('源ノ角ゴシック'), local('SourceHanSansJP-Regular'),
+       local('Noto Sans JP'), local('NotoSansJP-Regular');
+}
+@font-face {
+  font-family: 'HaloJP';
+  font-weight: 500;
+  src: local('Source Han Sans JP Medium'), local('源ノ角ゴシック Medium'), local('SourceHanSansJP-Medium'),
+       local('Noto Sans JP Medium'), local('NotoSansJP-Medium');
+}
+@font-face {
+  font-family: 'HaloJP';
+  font-weight: 600;
+  src: local('Source Han Sans JP SemiBold'), local('源ノ角ゴシック SemiBold'), local('SourceHanSansJP-SemiBold'),
+       local('Noto Sans JP SemiBold'), local('NotoSansJP-SemiBold');
+}
+@font-face {
+  font-family: 'HaloJP';
+  font-weight: 700;
+  src: local('Source Han Sans JP Bold'), local('源ノ角ゴシック Bold'), local('SourceHanSansJP-Bold'),
+       local('Noto Sans JP Bold'), local('NotoSansJP-Bold');
+}
 
 :root {
   /* Surfaces */
@@ -97,7 +123,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  font-family: 'Noto Sans JP', 'Manrope', -apple-system, 'Segoe UI', sans-serif;
+  font-family: 'HaloJP', 'Noto Sans JP', -apple-system, 'Hiragino Sans', sans-serif;
   font-size: var(--font-base);
   color: var(--text);
   background: var(--bg);
@@ -488,7 +514,7 @@ body[data-pattern="C"] .chip { border-radius: 3px; height: 18px; }
 .gv2-grid { display: grid; }
 
 .gv2-corner {
-  position: sticky; top: 0; left: 0; z-index: 6;
+  position: sticky; top: 0; left: 0; z-index: 12;
   grid-row: 1; grid-column: 1;
   background: var(--surface);
   border-right: 1px solid var(--line);
@@ -497,14 +523,14 @@ body[data-pattern="C"] .chip { border-radius: 3px; height: 18px; }
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 .gv2-header {
-  position: sticky; top: 0; z-index: 4;
+  position: sticky; top: 0; z-index: 8;
   grid-row: 1; grid-column: 2;
   display: flex;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 .gv2-side-cell {
-  position: sticky; left: 0; z-index: 3;
+  position: sticky; left: 0; z-index: 10;
   grid-column: 1;
   background: var(--surface);
   border-right: 1px solid var(--line);
@@ -542,22 +568,20 @@ body[data-pattern="C"] .chip { border-radius: 3px; height: 18px; }
 .cr-memo { font-size: 10px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .gh-hour {
-  border-right: 1px solid var(--line-2);
+  box-sizing: border-box;
+  border-left: 1px solid var(--line-2);
   display: flex; align-items: center; justify-content: flex-start;
   padding-left: 8px; gap: 2px;
   font-size: 12px; color: var(--muted);
+  flex-shrink: 0;
 }
 .gh-hour .hr-num { font-family: 'JetBrains Mono'; font-weight: 600; color: var(--text-2); font-size: 13px; }
 .gh-hour .hr-suffix { font-size: 10px; }
 
-.grid-hour { position: absolute; top: 0; bottom: 0; width: 0; border-right: 1px solid var(--line); }
+.grid-hour { position: absolute; top: 0; bottom: 0; width: 0; border-right: 1px solid var(--line-strong); pointer-events: none; }
+.grid-5min  { position: absolute; top: 0; bottom: 0; width: 0; border-right: 1px dotted #DADDE2; pointer-events: none; }
 
-.shift-band {
-  position: absolute; top: 4px; bottom: 4px;
-  background: oklch(0.98 0.01 245);
-  border-radius: 4px;
-  pointer-events: none;
-}
+.shift-band { display: none; }
 
 .book-block {
   position: absolute; top: 6px; bottom: 6px;
@@ -573,7 +597,7 @@ body[data-pattern="C"] .chip { border-radius: 3px; height: 18px; }
   box-shadow: 0 4px 14px rgba(15,20,25,.14), 0 0 0 1px rgba(15,20,25,.08);
   transform: translateY(-1px);
 }
-.bb-head { display: flex; gap: 4px; align-items: center; font-size: 10px; }
+.bb-head { display: flex; gap: 3px; align-items: center; justify-content: space-between; font-size: 10px; }
 .bb-status { font-weight: 700; font-size: 9px; padding: 0 3px; border-radius: 2px; background: rgba(255,255,255,.55); letter-spacing: .02em; }
 .bb-time { font-size: 10px; font-weight: 500; }
 .bb-body { display: flex; gap: 4px; align-items: center; font-size: 11px; overflow: hidden; }
@@ -2805,7 +2829,7 @@ select.fw-ctrl {
 .fw-right {
   background: linear-gradient(180deg, oklch(0.985 0.005 250), oklch(0.97 0.005 250));
   border-left: 1px solid var(--fw-ink-200);
-  padding: 16px 14px;
+  padding: 16px 16px 16px 14px;
   overflow-y: auto;
   display: flex; flex-direction: column; gap: 11px;
 }
@@ -2846,6 +2870,7 @@ select.fw-ctrl {
   padding: 14px 16px;
   box-shadow: 0 14px 30px -10px oklch(0.45 0.13 235 / .55);
   position: relative; overflow: hidden;
+  transform: translateZ(0); /* force own compositing layer → fixes border-radius in scroll container */
 }
 .fw-pay-total::after {
   content: ''; position: absolute; left: -10px; bottom: -40px;
@@ -2861,8 +2886,9 @@ select.fw-ctrl {
 .fw-pay-lbl::before { content: ''; width: 14px; height: 2px; background: var(--fw-gold); border-radius: 1px; }
 .fw-pay-num {
   font-family: 'Manrope', sans-serif;
-  font-size: 34px; font-weight: 800;
+  font-size: clamp(22px, 2.4vw, 34px); font-weight: 800;
   letter-spacing: -.025em; line-height: 1; margin-top: 7px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .fw-pay-yen { font-size: 18px; font-weight: 600; opacity: .75; margin-right: 2px; }
 .fw-pay-change {
@@ -2896,14 +2922,37 @@ select.fw-ctrl {
 .fw-meta-v { color: var(--fw-ink-700); }
 
 /* ── History strip ── */
+/* ── Resize handle between fw-main and fw-history ── */
+.fw-resize-handle {
+  flex-shrink: 0;
+  height: 6px;
+  cursor: ns-resize;
+  background: var(--fw-ink-200);
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
+  user-select: none;
+}
+.fw-resize-handle:hover,
+.fw-resize-handle:active { background: var(--fw-accent200); }
+.fw-resize-grip {
+  width: 32px; height: 2px;
+  border-radius: 1px;
+  background: var(--fw-ink-400);
+  pointer-events: none;
+}
+.fw-resize-handle:hover .fw-resize-grip,
+.fw-resize-handle:active .fw-resize-grip { background: var(--fw-accent); }
+
 .fw-history {
-  border-top: 1px solid var(--fw-ink-200);
   background: linear-gradient(180deg, oklch(0.97 0.005 250), oklch(0.96 0.008 250));
   padding: 10px 18px 12px;
   flex-shrink: 0;
+  display: flex; flex-direction: column;
+  min-height: 0;
 }
 .fw-hist-h {
   display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px;
+  flex-shrink: 0;
 }
 .fw-hist-ttl {
   font-size: 12.5px; font-weight: 700; color: var(--fw-ink-900);
@@ -2927,7 +2976,8 @@ select.fw-ctrl {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  max-height: 160px;
+  flex: 1;
+  min-height: 0;
   border: 1px solid var(--fw-ink-200);
   border-radius: 8px;
   background: var(--fw-surface);
@@ -3395,3 +3445,20 @@ select.fw-ctrl {
 }
 .ff-pay-opt input { display: none; }
 .ff-pay-opt.on { background: #0052cc; border-color: #0052cc; color: #fff; }
+
+/* ── カスタムツールチップ（即時表示） ── */
+.htip {
+  position: relative; display: inline-block; max-width: 100%;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.htip .htip-body {
+  position: absolute; bottom: calc(100% + 4px); left: 0;
+  background: #1e293b; color: #f8fafc;
+  padding: 5px 9px; border-radius: 6px;
+  font-size: 11px; white-space: pre-wrap; max-width: 320px;
+  line-height: 1.5; word-break: break-all;
+  pointer-events: none; z-index: 9999;
+  opacity: 0; transition: opacity 0.05s;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.htip:hover .htip-body { opacity: 1; }

@@ -5,7 +5,7 @@ import { useAppStore } from '../../store/state.js';
 import Icon from '../../components/Icon.jsx';
 import MasterTable from '../../components/MasterTable.jsx';
 
-const EMPTY = { code: '', name: '', display_order: 0, is_active: true };
+const EMPTY = { code: '', name: '', display_order: 0, is_active: true, gantt_start: 9, gantt_end: 23 };
 const INP = {
   padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6,
   background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontFamily: 'inherit',
@@ -39,6 +39,8 @@ export default function StoresSettings() {
       code: form.code.trim(), name: form.name.trim(),
       display_order: Number(form.display_order) || 0,
       is_active: !!form.is_active,
+      gantt_start: Number(form.gantt_start) || 9,
+      gantt_end: Number(form.gantt_end) || 23,
     };
     let error;
     if (modal === 'new') {
@@ -145,6 +147,18 @@ export default function StoresSettings() {
               </FormRow>
               <FormRow label="有効">
                 <input type="checkbox" checked={!!form.is_active} onChange={(e) => set('is_active', e.target.checked)} />
+              </FormRow>
+              <FormRow label="ガント開始時刻">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input style={{ ...INP, width: 70 }} type="number" min={0} max={23} value={form.gantt_start} onChange={(e) => set('gantt_start', e.target.value)} />
+                  <span style={{ fontSize: 13, color: 'var(--muted)' }}>時</span>
+                </div>
+              </FormRow>
+              <FormRow label="ガント終了時刻">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input style={{ ...INP, width: 70 }} type="number" min={1} max={24} value={form.gantt_end} onChange={(e) => set('gantt_end', e.target.value)} />
+                  <span style={{ fontSize: 13, color: 'var(--muted)' }}>時</span>
+                </div>
               </FormRow>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 4 }}>
                 <button className="btn sm ghost" onClick={close}>キャンセル</button>

@@ -1,10 +1,13 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Icon from '../components/Icon.jsx';
+import Combobox from '../components/Combobox.jsx';
+import NewCustomerModal from './NewCustomerModal.jsx';
 import { supabase } from '../lib/supabase.js';
 import { showToast } from '../lib/toast.js';
 import { useAppStore } from '../store/state.js';
 import { effectivePrice, rewardFor, KIND_ORDER } from '../lib/pricing.js';
 import { loadCustomerReservations } from '../hooks/useCustomers.js';
+import { getCachedMasters, setCachedMasters, fetchMasters } from '../lib/mastersFetcher.js';
 
 const STATUSES = [
   { value: 'reserved',  label: '予約' },
@@ -22,7 +25,6 @@ const NOMINATION_TYPES = [
   { value: 'honshi', label: '本指名' },
 ];
 
-const MOCK_FIRST_MEDIA = ['HP', '口コミ・紹介', '看板・ポスター', 'チラシ', 'SNS/Instagram', 'X(Twitter)', 'ホットペッパー', '店頭', 'その他'];
 const COURSE_KIND_ORDER = ['course', 'nomination', 'extension', 'event', 'option', 'discount', 'media', 'other'];
 const AVATAR_HUES = [245, 30, 150, 300, 200, 90, 350, 180];
 
@@ -65,10 +67,14 @@ function todayISO() {
 
 export default function ReservationFormModal({ customer, reservation, onClose, onSaved, onDeleted, standalone = false }) {
   const isEdit = !!reservation?.id;
-  const cust = customer || reservation?.customer || null;
   const currentStoreId = useAppStore((s) => s.currentStoreId);
   const stores = useAppStore((s) => s.stores);
   const currentStaff = useAppStore((s) => s.currentStaff);
+  const allCustomers = useAppStore((s) => s.allCustomers);
+
+  const [selectedCustomer, setSelectedCustomer] = useState(customer || reservation?.customer || null);
+  const [showNewCustomerModal, setShowNewCustomerModal] = useState(false);
+  const cust = selectedCustomer;
 
   const rootRef = useRef(null);
   const dragRef = useRef(null);
@@ -89,13 +95,7 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   const [selections, setSelections] = useState({});
   const [showSettings, setShowSettings] = useState(false);
 
-  const [fieldSettings, setFieldSettings] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('rfm_field_settings') || 'null');
-      if (!saved) return DEFAULT_FIELD_SETTINGS;
-      return { ...DEFAULT_FIELD_SETTINGS, ...saved, histCols: { ...DEFAULT_FIELD_SETTINGS.histCols, ...(saved.histCols || {}) } };
-    } catch { return DEFAULT_FIELD_SETTINGS; }
-  });
+  const [fieldSettings, setFieldSettings] = useState(DEFAULT_FIELD_SETTINGS);
 
   const [date,            setDate]            = useState(reservation?.reserved_date || todayISO());
   const [startTime,       setStartTime]       = useState(reservation?.start_time ? trimSec(reservation.start_time) : toHHMM(new Date(Date.now() + 30 * 60 * 1000)));
@@ -116,9 +116,30 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   const [receiveDriver,   setReceiveDriver]   = useState(reservation?.receive_driver || '');
   const [receiptNo,       setReceiptNo]       = useState(reservation?.receipt_no || '');
 
+  // resv_form_fields をDBから読み込む
   useEffect(() => {
-    localStorage.setItem('rfm_field_settings', JSON.stringify(fieldSettings));
-  }, [fieldSettings]);
+    if (!currentStoreId) return;
+    supabase
+      .from('resv_form_fields')
+      .select('*')
+      .or(`store_id.eq.${currentStoreId},store_id.is.null`)
+      .order('sort_order')
+      .then(({ data }) => {
+        if (!data) return;
+        // store_id 一致を優先（ShiftFormSettings と同パターン）
+        const seen = new Map();
+        for (const f of data) {
+          if (!seen.has(f.field_key) || f.store_id !== null) seen.set(f.field_key, f);
+        }
+        const merged = {};
+        for (const [key, f] of seen) {
+          // field_key を camelCase にマップ
+          const camel = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+          merged[camel] = f.is_visible;
+        }
+        setFieldSettings(prev => ({ ...prev, ...merged }));
+      });
+  }, [currentStoreId]);
 
   const updateSetting = useCallback((key, value) => {
     setFieldSettings(prev => ({ ...prev, [key]: value }));
@@ -145,42 +166,28 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   }, []);
 
   // ── Load masters ──────────────────────────────────────────────────────
+  // useMastersWarmer が localStorage にプリロード済みなので、キャッシュがあれば即時表示
   useEffect(() => {
     if (!currentStoreId) return;
     let cancelled = false;
-    (async () => {
-      const [{ data: groups }, { data: ranks }] = await Promise.all([
-        supabase.from('option_groups').select('*').eq('store_id', currentStoreId).order('display_order'),
-        supabase.from('cast_ranks').select('*').eq('store_id', currentStoreId).order('display_order'),
-      ]);
-      if (cancelled) return;
-      const groupIds = (groups || []).map((g) => g.id);
-      const { data: allItems } = groupIds.length
-        ? await supabase.from('option_items').select('*').in('group_id', groupIds).eq('is_active', true).order('display_order')
-        : { data: [] };
-      if (cancelled) return;
-      const itemIds = (allItems || []).map((i) => i.id);
-      const { data: rankPriceRows } = itemIds.length
-        ? await supabase.from('option_item_rank_prices').select('*').in('item_id', itemIds)
-        : { data: [] };
-      if (cancelled) return;
-      const groupById = {}, itemsByGroup = {}, itemById = {};
-      for (const g of (groups || [])) { groupById[g.id] = g; itemsByGroup[g.id] = []; }
-      for (const item of (allItems || [])) { itemById[item.id] = item; if (itemsByGroup[item.group_id]) itemsByGroup[item.group_id].push(item); }
-      const rankPrices = {};
-      for (const rp of (rankPriceRows || [])) { if (!rankPrices[rp.item_id]) rankPrices[rp.item_id] = {}; rankPrices[rp.item_id][rp.cast_rank_id] = rp.price; }
-      const mastersData = { groups: groups || [], groupById, itemsByGroup, itemById, rankPrices, ranks: ranks || [] };
-      setMasters(mastersData);
-      const initSel = {};
-      for (const g of (groups || [])) initSel[g.id] = g.multi_select ? new Set() : null;
-      for (const si of (reservation?.selected_items || [])) {
-        const g = groupById[si.group_id];
-        if (!g) continue;
-        if (g.multi_select) { if (!(initSel[g.id] instanceof Set)) initSel[g.id] = new Set(); initSel[g.id].add(si.item_id); }
-        else initSel[g.id] = si.item_id;
-      }
-      setSelections(initSel);
-    })();
+
+    // キャッシュから即時表示
+    const cached = getCachedMasters(currentStoreId);
+    if (cached && !cancelled) {
+      setMasters(cached);
+      setSelections(buildModalSelections(cached, reservation));
+    }
+
+    // DB から最新データを取得してキャッシュ更新
+    fetchMasters(currentStoreId)
+      .then((mastersData) => {
+        if (cancelled) return;
+        setCachedMasters(currentStoreId, mastersData);
+        setMasters(mastersData);
+        setSelections(buildModalSelections(mastersData, reservation));
+      })
+      .catch(() => {});
+
     return () => { cancelled = true; };
   }, [currentStoreId]);
 
@@ -199,7 +206,7 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   useEffect(() => {
     const cid = cust?.id || reservation?.customer_id;
     if (!cid) return;
-    loadCustomerReservations(cid).then(setHistory);
+    loadCustomerReservations(cid).then((res) => setHistory(res?.data ?? res ?? []));
   }, [cust?.id, reservation?.customer_id]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────
@@ -279,14 +286,46 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
         lines.push({ item_id: itemId, group_id: group.id, kind: group.kind, name: item.name, group_label: group.label, amount: finalPrice, reward });
       }
     }
+
+    // ── media / driver の専用フィールドを selected_items に追加 ──────────
+    // これらは GroupInput 経由ではなく専用 UI で管理されるため selections に入らない。
+    // item 名から逆引きして kind ごとにスナップショットへ追加する。
+    const specialEntries = [
+      { kind: 'media',  name: firstMedia },
+      { kind: 'driver', name: sendDriver },
+      { kind: 'driver', name: receiveDriver },
+    ];
+    for (const { kind: sk, name } of specialEntries) {
+      if (!name) continue;
+      const groups = masters.groups.filter(g => g.kind === sk);
+      for (const g of groups) {
+        const items = masters.itemsByGroup[g.id] || [];
+        const item = items.find(i => i.name === name);
+        if (!item) continue;
+        // 重複追加を防ぐ（同名ドライバーが send/receive 両方に選ばれた場合は 2 行）
+        lines.push({ item_id: item.id, group_id: g.id, kind: sk, name: item.name, group_label: g.label, amount: 0, reward: 0 });
+        break; // 最初にマッチしたグループのみ
+      }
+    }
+
     return lines;
-  }, [masters, selections, ladyCastRankId, isTriple, isFirstMeet]);
+  }, [masters, selections, ladyCastRankId, isTriple, isFirstMeet, firstMedia, sendDriver, receiveDriver]);
 
   const totalAmount = useMemo(() => lineItems.reduce((s, l) => s + l.amount, 0) + Number(feeAdj || 0), [lineItems, feeAdj]);
   const totalReward = useMemo(() => lineItems.reduce((s, l) => s + l.reward, 0) + Number(rewardAdj || 0), [lineItems, rewardAdj]);
 
   // ── Save ──────────────────────────────────────────────────────────────
   const save = useCallback(async () => {
+    // ── blank_policy validation ────────────────────────────────────────
+    for (const g of (masters?.groups || [])) {
+      if (g.meta?.blank_policy !== 'required') continue;
+      const sel = selections[g.id];
+      const isEmpty = !sel || (sel instanceof Set && sel.size === 0);
+      if (isEmpty) {
+        showToast('error', `「${g.label}」は必須項目です`);
+        return;
+      }
+    }
     setLoading(true);
     const courseGroup = masters?.groups.find((g) => g.kind === 'course');
     const courseItemId = courseGroup ? (selections[courseGroup.id] || null) : null;
@@ -318,6 +357,8 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
       send_driver:    sendDriver    || null,
       receive_driver: receiveDriver || null,
       receipt_no:     receiptNo     || null,
+      nomination_type:  nominationType  || null,
+      reception_method: receptionMethod || null,
       updated_by:     currentStaff?.id || null,
     };
     let resp;
@@ -328,7 +369,7 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
     setLastSavedAt(new Date());
     onSaved?.(resp.data);
     setSavedDialogVisible(true);
-  }, [masters, selections, cust, reservation, storeId, currentStoreId, ladyId, date, startTime, endTime, totalDuration, status, roomNo, memo, totalAmount, totalReward, lineItems, feeAdj, rewardAdj, paymentMethod, isTriple, isFirstMeet, firstMedia, ladyStatus, sendDriver, receiveDriver, receiptNo, currentStaff, isEdit]);
+  }, [masters, selections, cust, reservation, storeId, currentStoreId, ladyId, date, startTime, endTime, totalDuration, status, roomNo, memo, totalAmount, totalReward, lineItems, feeAdj, rewardAdj, paymentMethod, isTriple, isFirstMeet, firstMedia, ladyStatus, sendDriver, receiveDriver, receiptNo, nominationType, receptionMethod, currentStaff, isEdit]);
 
   useEffect(() => { saveRef.current = save; }, [save]);
 
@@ -347,6 +388,8 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   // ── Computed values ───────────────────────────────────────────────────
   const groupsByKind = {};
   if (masters) for (const g of masters.groups) { if (!groupsByKind[g.kind]) groupsByKind[g.kind] = []; groupsByKind[g.kind].push(g); }
+  const driverItems = (groupsByKind['driver'] || []).flatMap(g => masters?.itemsByGroup[g.id] || []);
+  const mediaItems  = (groupsByKind['media']  || []).flatMap(g => masters?.itemsByGroup[g.id] || []);
 
   const courseAmt    = lineItems.filter(l => l.kind === 'course').reduce((s, l) => s + l.amount, 0);
   const extAmt       = lineItems.filter(l => l.kind === 'extension').reduce((s, l) => s + l.amount, 0);
@@ -386,22 +429,71 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
     ? { position: 'relative', width: '100%', height: '100vh', borderRadius: 0, top: 'auto', right: 'auto', maxHeight: '100vh' }
     : pos.x !== null ? { left: pos.x + 'px', top: pos.y + 'px', right: 'auto' } : {};
 
+  // ── Helper: render input for a group based on display_type ────────────
+  const GroupInput = ({ g, placeholder, className }) => {
+    const items = masters?.itemsByGroup[g.id] || [];
+    const sel = selections[g.id];
+    const dt = g.meta?.display_type ?? 'select';
+
+    if (dt === 'select_editable') {
+      const currentName = (typeof sel === 'string' && sel) ? (items.find(i => i.id === sel)?.name ?? '') : '';
+      const listId = `dl-${g.id}`;
+      return (
+        <span style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+          <input
+            className={`rf-inp ${className || 'rf-flex1'}`}
+            list={listId}
+            value={currentName}
+            placeholder={placeholder || '— なし —'}
+            onChange={e => {
+              const found = items.find(i => i.name === e.target.value);
+              setSelections(prev => ({ ...prev, [g.id]: found?.id || null }));
+            }}
+            style={{ width: '100%' }}
+          />
+          <datalist id={listId}>
+            {items.map(i => <option key={i.id} value={i.name} />)}
+          </datalist>
+        </span>
+      );
+    }
+
+    if (dt === 'multi_select' || dt === 'multi_select_count') {
+      return (
+        <div className="rf-chips">
+          {items.map(item => {
+            const checked = sel instanceof Set ? sel.has(item.id) : sel === item.id;
+            return (
+              <label key={item.id} className={`rf-chip${checked ? ' on' : ''}`}>
+                <input type="checkbox" checked={checked}
+                  onChange={() => selectItem(g.id, item.id, true)} />
+                {item.name}
+              </label>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // default: 'select'
+    return (
+      <select
+        key={g.id}
+        className={`rf-sel ${className || 'rf-flex1'}`}
+        value={typeof sel === 'string' ? sel : ''}
+        onChange={e => setSelections(prev => ({ ...prev, [g.id]: e.target.value || null }))}
+      >
+        <option value="">{placeholder || '— なし —'}</option>
+        {items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select>
+    );
+  };
+
   // ── Helper: render a select for a masters group ───────────────────────
   const GroupSelect = ({ kind, placeholder, className }) => {
     const groups = groupsByKind[kind] || [];
-    if (!masters || !groups.length) return <select className={`rf-sel ${className || 'rf-flex1'}`}><option value="">{ placeholder || '—'}</option></select>;
-    return groups.map(g => {
-      const items = masters.itemsByGroup[g.id] || [];
-      const sel = selections[g.id];
-      return (
-        <select key={g.id} className={`rf-sel ${className || 'rf-flex1'}`}
-          value={typeof sel === 'string' ? sel : ''}
-          onChange={e => setSelections(prev => ({ ...prev, [g.id]: e.target.value || null }))}>
-          <option value="">{placeholder || '— なし —'}</option>
-          {items.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-      );
-    });
+    if (!masters || !groups.length) return <select className={`rf-sel ${className || 'rf-flex1'}`}><option value="">{placeholder || '—'}</option></select>;
+    return groups.map(g => <GroupInput key={g.id} g={g} placeholder={placeholder} className={className} />);
   };
 
   // ── Render ────────────────────────────────────────────────────────────
@@ -522,6 +614,31 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
               </div>
 
               <div className="rf-fr">
+                <span className="rf-lbl">顧客</span>
+                <Combobox
+                  items={allCustomers.map(c => ({
+                    id: c.id,
+                    name: [c.name, c.phone_normalized].filter(Boolean).join('　'),
+                  }))}
+                  value={selectedCustomer?.id ?? null}
+                  onChange={(id) => {
+                    const found = allCustomers.find(c => c.id === id) ?? null;
+                    setSelectedCustomer(found);
+                  }}
+                  placeholder="名前・電話番号で検索"
+                  className="rf-inp"
+                />
+                <button
+                  type="button"
+                  className="cf-btn ghost"
+                  style={{ marginLeft: 4, whiteSpace: 'nowrap', padding: '0 8px', height: 30, fontSize: 12 }}
+                  onClick={() => setShowNewCustomerModal(true)}
+                >
+                  <Icon name="plus" size={11} />新規
+                </button>
+              </div>
+
+              <div className="rf-fr">
                 <span className="rf-lbl">店舗</span>
                 {stores?.length > 0 ? (
                   <select className="rf-sel rf-flex1" value={storeId} onChange={e => setStoreId(e.target.value)}>
@@ -577,7 +694,7 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
                 <span className="rf-lbl sm">初回媒体</span>
                 <select className="rf-sel rf-flex1" value={firstMedia} onChange={e => setFirstMedia(e.target.value)}>
                   <option value="">—</option>
-                  {MOCK_FIRST_MEDIA.map(m => <option key={m} value={m}>{m}</option>)}
+                  {mediaItems.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                 </select>
               </div>
 
@@ -597,17 +714,17 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
                 <input className="rf-inp rf-w-num" value={receiptNo} onChange={e => setReceiptNo(e.target.value)} placeholder="—" />
               </div>
 
-              {fieldSettings.showDrivers && (
+              {fieldSettings.showDrivers && driverItems.length > 0 && (
                 <div className="rf-fr">
                   <span className="rf-lbl">送りD</span>
                   <select className="rf-sel rf-flex1" value={sendDriver} onChange={e => setSendDriver(e.target.value)}>
                     <option value="">—</option>
-                    {['田中', '山田', '佐藤'].map(d => <option key={d} value={d}>{d}</option>)}
+                    {driverItems.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
                   </select>
                   <span className="rf-lbl sm">迎えD</span>
                   <select className="rf-sel rf-flex1" value={receiveDriver} onChange={e => setReceiveDriver(e.target.value)}>
                     <option value="">—</option>
-                    {['田中', '山田', '佐藤'].map(d => <option key={d} value={d}>{d}</option>)}
+                    {driverItems.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
                   </select>
                 </div>
               )}
@@ -654,24 +771,10 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
                 .map(g => {
                   const items = masters.itemsByGroup[g.id] || [];
                   if (!items.length) return null;
-                  const sel = selections[g.id];
                   return (
                     <div key={g.id} className="rf-fr rf-chips-row">
                       <span className="rf-lbl">{g.label}</span>
-                      <div className="rf-chips">
-                        {items.map(item => {
-                          const checked = g.multi_select
-                            ? (sel instanceof Set && sel.has(item.id))
-                            : sel === item.id;
-                          return (
-                            <label key={item.id} className={`rf-chip${checked ? ' on' : ''}`}>
-                              <input type="checkbox" checked={checked}
-                                onChange={() => selectItem(g.id, item.id, g.multi_select)} />
-                              {item.name}
-                            </label>
-                          );
-                        })}
-                      </div>
+                      <GroupInput g={g} />
                     </div>
                   );
                 })
@@ -814,6 +917,43 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
           </div>
         </div>
       )}
+
+      {showNewCustomerModal && (
+        <NewCustomerModal
+          onClose={() => setShowNewCustomerModal(false)}
+          onCreated={(newCustomer) => {
+            setSelectedCustomer(newCustomer);
+            setShowNewCustomerModal(false);
+          }}
+        />
+      )}
     </>
   );
+}
+
+/** masters と予約データから初期 selections を構築（ReservationFormModal 用） */
+function buildModalSelections(masters, reservation) {
+  const initSel = {};
+  for (const g of (masters.groups || [])) {
+    const dt = g.meta?.display_type;
+    const isMulti = g.multi_select || dt === 'multi_select' || dt === 'multi_select_count';
+    initSel[g.id] = isMulti ? new Set() : null;
+  }
+  for (const si of (reservation?.selected_items || [])) {
+    let g = masters.groupById?.[si.group_id];
+    let itemId = si.item_id;
+    if (!g || !itemId) {
+      const kindGroups = (masters.groups || []).filter(grp => grp.kind === si.kind);
+      for (const grp of kindGroups) {
+        const matched = (masters.itemsByGroup?.[grp.id] || []).find(item => item.name === si.name);
+        if (matched) { g = grp; itemId = matched.id; break; }
+      }
+    }
+    if (!g || !itemId) continue;
+    const dt2 = g.meta?.display_type;
+    const isMulti2 = g.multi_select || dt2 === 'multi_select' || dt2 === 'multi_select_count';
+    if (isMulti2) { if (!(initSel[g.id] instanceof Set)) initSel[g.id] = new Set(); initSel[g.id].add(itemId); }
+    else initSel[g.id] = itemId;
+  }
+  return initSel;
 }

@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Icon from '../components/Icon.jsx';
 import Avatar from '../components/Avatar.jsx';
-import { useCustomers, loadCustomerReservations, saveCustomer, loadCustomerCallLogs } from '../hooks/useCustomers.js';
+import { useCustomers, loadCustomerReservations, saveCustomer, loadCustomerCallLogs, RESV_PAGE_SIZE } from '../hooks/useCustomers.js';
 import { useAppStore } from '../store/state.js';
 import { showToast } from '../lib/toast.js';
 import { formatCallTime } from '../lib/utils.js';
 import { supabase } from '../lib/supabase.js';
 import NewReservationModal from '../overlays/NewReservationModal.jsx';
+import { openReservationWindow } from '../lib/reservationWindowBridge.js';
 import NewCustomerModal from '../overlays/NewCustomerModal.jsx';
 import { exportRowsAsCsv } from '../lib/csv.js';
 
@@ -18,6 +19,9 @@ export default function Customers() {
   const { customers, loading, reload } = useCustomers();
   const setAllCustomers = useAppStore((s) => s.setAllCustomers);
   const allCustomers = useAppStore((s) => s.allCustomers);
+
+  // 画面マウント時に必ず最新データを取得（DBマイグレーション後の stale 状態を解消）
+  useEffect(() => { reload(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [q, setQ] = useState('');
   const [rankFilter, setRankFilter] = useState('');
@@ -33,11 +37,16 @@ export default function Customers() {
     return true;
   });
 
-  const selected = customers.find((c) => c.id === selectedId) || filtered[0] || null;
+  // filtered の中にいる場合だけ選択を維持。フィルタで消えたら先頭に移す。
+  const selected = filtered.find((c) => c.id === selectedId) || filtered[0] || null;
 
   useEffect(() => {
-    if (!selectedId && filtered.length > 0) setSelectedId(filtered[0].id);
-  }, [customers]);
+    if (!selectedId && filtered.length > 0) { setSelectedId(filtered[0].id); return; }
+    // q / rankFilter 変更後、現在の選択が絞り込み結果に含まれなくなったらリセット
+    if (selectedId && !filtered.some((c) => c.id === selectedId)) {
+      setSelectedId(filtered[0]?.id || null);
+    }
+  }, [q, rankFilter, customers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = async (id, patch) => {
     const { data, error } = await saveCustomer(id, patch);
@@ -145,8 +154,7 @@ export default function Customers() {
 function CustomerDetail({ c, onSave }) {
   const [editing, setEditing] = useState(null); // null | 'info' | 'alert' | 'shared' | 'memo'
   const [showNewRsv, setShowNewRsv] = useState(false);
-  const [showMemoAdd, setShowMemoAdd] = useState(false);
-  const [newMemo, setNewMemo] = useState('');
+  const [memoVal, setMemoVal] = useState(c.memo || '');
   const [form, setForm] = useState({
     name: c.name || '',
     rank: c.rank || 'C',
@@ -154,16 +162,27 @@ function CustomerDetail({ c, onSave }) {
     alert_memo: c.alert_memo || '',
     shared_memo: c.shared_memo || '',
   });
-  const [history, setHistory] = useState(null);
-  const [callLogs, setCallLogs] = useState(null);
+  const [history,       setHistory]       = useState(null);
+  const [historyTotal,  setHistoryTotal]  = useState(0);
+  const [callLogs,      setCallLogs]      = useState(null);
+  const [editingCallId, setEditingCallId] = useState(null);
+  const [callMemoVal,   setCallMemoVal]   = useState('');
+  const [histTab,       setHistTab]       = useState('usage');
+  const callMemoRef = useRef(null);
 
   useEffect(() => {
-    loadCustomerReservations(c.id).then(setHistory);
+    setHistory(null);
+    setHistoryTotal(0);
+    setMemoVal(c.memo || '');
+    loadCustomerReservations(c.id).then(({ data, count }) => {
+      setHistory(data);
+      setHistoryTotal(count);
+    });
   }, [c.id]);
 
   useEffect(() => {
     const phone = c.phone_normalized || c.phone;
-    const fetch = () => loadCustomerCallLogs(phone, 6).then(setCallLogs);
+    const fetch = () => loadCustomerCallLogs(phone, 200).then(setCallLogs);
     fetch();
     const ch = supabase
       .channel(`call_logs_detail_${c.id}`)
@@ -176,22 +195,25 @@ function CustomerDetail({ c, onSave }) {
 
   const saveField = (patch) => { onSave(c.id, patch); setEditing(null); };
 
-  const addMemo = async () => {
-    if (!newMemo.trim()) return;
-    const d = new Date();
-    const entry = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${newMemo.trim()}`;
-    const updated = c.memo ? `${entry}\n${c.memo}` : entry;
-    onSave(c.id, { memo: updated });
-    setNewMemo(''); setShowMemoAdd(false);
+  const startEditCallMemo = (id, current) => {
+    setEditingCallId(id);
+    setCallMemoVal(current || '');
+    setTimeout(() => callMemoRef.current?.focus(), 30);
   };
 
-  const pastMemos = (() => {
-    if (!c.memo) return [];
-    return c.memo.split(/\n+/).map((s) => s.trim()).filter(Boolean).map((line) => {
-      const m = line.match(/^(\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}\/\d{1,2})\s+(.+)$/);
-      return m ? { date: m[1], text: m[2] } : { date: '', text: line };
-    }).slice(0, 8);
-  })();
+  const saveCallMemo = useCallback(async (id, val) => {
+    setEditingCallId(null);
+    const trimmed = val.trim();
+    const row = callLogs?.find(r => r.id === id);
+    if (trimmed === (row?.memo || '')) return;
+    const { error } = await supabase
+      .from('call_logs')
+      .update({ memo: trimmed || null })
+      .eq('id', id);
+    if (error) showToast('error', '保存失敗');
+  }, [callLogs]);
+
+  const saveMemo = () => { onSave(c.id, { memo: memoVal.trim() || null }); setEditing(null); };
 
   const tags = c.tags || [];
   const avg = (c.total_visits ?? 0) > 0 ? Math.round((c.total_spent || 0) / c.total_visits) : 0;
@@ -229,7 +251,7 @@ function CustomerDetail({ c, onSave }) {
       {/* 上段: 顧客データ ｜ 顧客メモ */}
       <div className="cf-grid" style={{ margin: '10px 0 8px' }}>
         <div className="cf-col">
-          <div className="cf-card">
+          <div className="cf-card" style={editing === 'info' ? { minHeight: 240, boxSizing: 'border-box' } : { height: 240, boxSizing: 'border-box', overflow: 'hidden' }}>
             <div className="cf-card-head">
               <Icon name="users" size={13} />
               <span className="cf-section-title">顧客データ</span>
@@ -272,157 +294,424 @@ function CustomerDetail({ c, onSave }) {
         </div>
 
         <div className="cf-col">
-          <div className="cf-card" style={{ flex: 1 }}>
-            <div className="cf-card-head">
+          <div className="cf-card" style={{ height: 240, boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+            <div className="cf-card-head" style={{ flexShrink: 0 }}>
               <Icon name="edit" size={13} />
               <span className="cf-section-title">顧客メモ</span>
-              <button className="cf-edit-btn" onClick={() => setShowMemoAdd((v) => !v)} title="メモを追加">
-                <Icon name="plus" size={12} />
-              </button>
+              {editing === 'memo' ? (
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button className="btn sm primary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={saveMemo}>保存</button>
+                  <button className="btn sm" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => { setEditing(null); setMemoVal(c.memo || ''); }}>取消</button>
+                </div>
+              ) : (
+                <button className="cf-edit-btn" onClick={() => setEditing('memo')} title="メモを編集">
+                  <Icon name="edit" size={12} />
+                </button>
+              )}
             </div>
-            {showMemoAdd && (
-              <div style={{ marginBottom: 10 }}>
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              {editing === 'memo' ? (
                 <textarea
                   className="cf-memo-input"
-                  rows={2}
-                  placeholder="会話メモを入力..."
-                  value={newMemo}
-                  onChange={(e) => setNewMemo(e.target.value)}
+                  style={{ height: '100%', resize: 'none', boxSizing: 'border-box' }}
+                  value={memoVal}
+                  onChange={(e) => setMemoVal(e.target.value)}
+                  placeholder="顧客メモを入力..."
                   autoFocus
                 />
-                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <button className="btn sm primary" onClick={addMemo}>追加</button>
-                  <button className="btn sm" onClick={() => { setShowMemoAdd(false); setNewMemo(''); }}>キャンセル</button>
-                </div>
-              </div>
-            )}
-            {pastMemos.length > 0 ? (
-              <div className="cf-past-memos">
-                {pastMemos.map((m, i) => (
-                  <div key={i} className="cf-past-memo">
-                    {m.date && <span className="cf-past-date mono">{m.date}</span>}
-                    <span className="cf-past-text">{m.text}</span>
-                  </div>
-                ))}
-              </div>
-            ) : !showMemoAdd && (
-              <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>メモなし</div>
-            )}
+              ) : memoVal ? (
+                <p style={{ fontSize: 12, color: 'var(--fg)', lineHeight: 1.7, margin: 0, whiteSpace: 'pre-wrap' }}>{memoVal}</p>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>メモなし</div>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* 下段: 着信履歴 ｜ 女子への連絡事項 + 要注意事項 */}
-      <div className="cf-grid" style={{ marginBottom: 10 }}>
-        <div className="cf-col">
-          <div className="cf-card" style={{ flex: 1 }}>
-            <div className="cf-card-head">
-              <Icon name="phoneIn" size={13} />
-              <span className="cf-section-title">着信履歴</span>
+      {/* 下段: 着信メモ ｜ 女子への連絡事項 ｜ 要注意事項 — 3カラム */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14, marginBottom: 10 }}>
+
+        {/* 着信メモ */}
+        <div className="cf-card" style={{ minHeight: 180 }}>
+          <div className="cf-card-head">
+            <Icon name="phoneIn" size={13} />
+            <span className="cf-section-title">着信メモ</span>
+            {callLogs && <span style={{ fontSize: 10, color: 'var(--muted)' }}>{callLogs.length}件</span>}
+          </div>
+          {!callLogs ? (
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>読み込み中...</div>
+          ) : callLogs.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>着信記録なし</div>
+          ) : (
+            <div style={{ height: 150, overflowY: 'auto', borderRadius: 6, border: '1px solid var(--line)' }}>
+              {callLogs.map((r, i) => (
+                <div key={r.id} style={{
+                  display: 'grid', gridTemplateColumns: '90px 1fr',
+                  alignItems: 'center', gap: 6,
+                  padding: '5px 8px', flexShrink: 0,
+                  background: i % 2 === 0 ? 'var(--bg-subtle, #f8f9fa)' : 'transparent',
+                  borderBottom: i < callLogs.length - 1 ? '1px solid var(--line-2, #f0f0f0)' : 'none',
+                }}>
+                  <span className="mono" style={{ fontSize: 11, color: 'var(--muted)', flexShrink: 0 }}>
+                    {formatCallTime(r.started_at)}
+                  </span>
+                  {editingCallId === r.id ? (
+                    <textarea
+                      ref={callMemoRef}
+                      value={callMemoVal}
+                      rows={2}
+                      onChange={(e) => setCallMemoVal(e.target.value)}
+                      onBlur={() => saveCallMemo(r.id, callMemoVal)}
+                      onKeyDown={(e) => {
+                        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); saveCallMemo(r.id, callMemoVal); }
+                        if (e.key === 'Escape') { e.preventDefault(); setEditingCallId(null); }
+                      }}
+                      style={{
+                        width: '100%', fontSize: 11, padding: '2px 4px',
+                        border: '1px solid var(--halo-400, #60a5fa)', borderRadius: 3,
+                        background: 'var(--bg)', color: 'var(--text)',
+                        fontFamily: 'inherit', outline: 'none', resize: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  ) : (
+                    <span
+                      onClick={() => startEditCallMemo(r.id, r.memo)}
+                      title={r.memo || 'クリックでメモ入力'}
+                      style={{
+                        fontSize: 11, cursor: 'text', display: 'block',
+                        overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                        color: r.memo ? 'var(--text)' : 'var(--muted)',
+                        minHeight: 16,
+                      }}
+                    >
+                      {r.memo ? r.memo.replace(/\n/g, ' ↵ ') : '— メモなし'}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
+          )}
+        </div>
+
+        {/* 女子への連絡事項 */}
+        <div className="cf-card">
+          <div className="cf-card-head">
+            <Icon name="bolt" size={13} />
+            <span className="cf-section-title">女子への連絡事項</span>
+            <button className="cf-edit-btn" onClick={() => setEditing(editing === 'shared' ? null : 'shared')}>
+              <Icon name="edit" size={12} />
+            </button>
+          </div>
+          {editing === 'shared' ? (
+            <>
+              <textarea className="cf-memo-input" rows={4} value={form.shared_memo} onChange={upd('shared_memo')} />
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button className="btn sm primary" onClick={() => saveField({ shared_memo: form.shared_memo || null })}>保存</button>
+                <button className="btn sm" onClick={() => setEditing(null)}>キャンセル</button>
+              </div>
+            </>
+          ) : (
+            <p className="cf-lady-memo">{c.shared_memo || 'なし'}</p>
+          )}
+        </div>
+
+        {/* 要注意事項 */}
+        <div className="cf-card cf-alert-card">
+          <div className="cf-card-head">
+            <Icon name="bolt" size={13} style={{ color: 'var(--danger)' }} />
+            <span className="cf-section-title">要注意事項</span>
+            <button className="cf-edit-btn" onClick={() => setEditing(editing === 'alert' ? null : 'alert')}>
+              <Icon name="edit" size={12} />
+            </button>
+          </div>
+          {editing === 'alert' ? (
+            <>
+              <textarea className="cf-memo-input" rows={4} value={form.alert_memo} onChange={upd('alert_memo')} />
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button className="btn sm primary" onClick={() => saveField({ alert_memo: form.alert_memo || null })}>保存</button>
+                <button className="btn sm" onClick={() => setEditing(null)}>キャンセル</button>
+              </div>
+            </>
+          ) : (
+            <p className="cf-alert-text">{c.alert_memo || 'なし'}</p>
+          )}
+        </div>
+
+      </div>
+
+      {/* タブ: 利用履歴 ｜ 着信メモ */}
+      <div style={{ borderRadius: 8, border: '1px solid var(--line)', overflow: 'hidden' }}>
+        {/* タブバー */}
+        <div style={{ display: 'flex', borderBottom: '1px solid var(--line)', background: 'var(--bg-subtle)' }}>
+          {[
+            { key: 'usage',   label: '利用履歴', count: historyTotal || history?.length, icon: 'calendar' },
+            { key: 'calllog', label: '着信メモ',  count: callLogs?.length,  icon: 'phoneIn'  },
+          ].map(({ key, label, count, icon }) => (
+            <button
+              key={key}
+              onClick={() => setHistTab(key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '9px 16px', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                fontSize: 13, fontWeight: histTab === key ? 700 : 400,
+                color: histTab === key ? 'var(--halo-600)' : 'var(--muted)',
+                background: histTab === key ? 'var(--surface)' : 'transparent',
+                borderBottom: histTab === key ? '2px solid var(--halo-500)' : '2px solid transparent',
+                marginBottom: -1,
+              }}
+            >
+              <Icon name={icon} size={13} />
+              {label}
+              {count != null && (
+                <span style={{
+                  fontSize: 10, background: histTab === key ? 'var(--halo-100)' : 'var(--line)',
+                  color: histTab === key ? 'var(--halo-700)' : 'var(--muted)',
+                  borderRadius: 10, padding: '1px 6px', fontWeight: 600,
+                }}>
+                  {count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* タブコンテンツ */}
+        {histTab === 'usage' ? (
+          <ReservationHistory customerId={c.id} history={history} totalCount={historyTotal} customer={c} />
+        ) : (
+          <div>
             {!callLogs ? (
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>読み込み中...</div>
+              <div style={{ padding: '32px', textAlign: 'center', fontSize: 13, color: 'var(--muted)' }}>読み込み中...</div>
             ) : callLogs.length === 0 ? (
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>着信記録なし</div>
+              <div style={{ padding: '32px', textAlign: 'center', fontSize: 13, color: 'var(--muted)' }}>着信記録なし</div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                {callLogs.map((r) => (
-                  <div key={r.id} style={{ display: 'flex', gap: 8, fontSize: 12, alignItems: 'center' }}>
-                    <span className="mono" style={{ color: 'var(--muted)', flexShrink: 0 }}>{formatCallTime(r.started_at)}</span>
-                    {r.duration != null && (
-                      <span style={{ color: 'var(--muted)', flexShrink: 0 }}>{r.duration}秒</span>
-                    )}
-                  </div>
-                ))}
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                  <thead>
+                    <tr>
+                      {[['日時','130px'],['発信番号','140px'],['着信先番号','140px'],['通話時間','80px'],['メモ','']].map(([h, w]) => (
+                        <th key={h} style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: 'var(--muted)', borderBottom: '2px solid var(--line)', background: 'var(--bg-subtle)', position: 'sticky', top: 0, textAlign: 'left', width: w || 'auto', whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {callLogs.map((r, i) => {
+                      const dur = r.duration != null ? `${Math.floor(r.duration / 60)}:${String(r.duration % 60).padStart(2, '0')}` : '—';
+                      return (
+                        <tr key={r.id} style={{ background: i % 2 === 0 ? 'var(--bg-subtle)' : 'transparent', borderBottom: '1px solid var(--line-2)' }}>
+                          <td className="mono" style={{ padding: '7px 10px', fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{formatCallTime(r.started_at)}</td>
+                          <td className="mono" style={{ padding: '7px 10px', fontSize: 11, whiteSpace: 'nowrap' }}>{r.from_number || '—'}</td>
+                          <td className="mono" style={{ padding: '7px 10px', fontSize: 11, whiteSpace: 'nowrap', color: 'var(--muted)' }}>{r.to_number || '—'}</td>
+                          <td className="mono" style={{ padding: '7px 10px', fontSize: 11, whiteSpace: 'nowrap' }}>{dur}</td>
+                          <td style={{ padding: '7px 10px' }}>
+                            {editingCallId === r.id ? (
+                              <textarea
+                                ref={callMemoRef}
+                                value={callMemoVal}
+                                rows={2}
+                                onChange={(e) => setCallMemoVal(e.target.value)}
+                                onBlur={() => saveCallMemo(r.id, callMemoVal)}
+                                onKeyDown={(e) => {
+                                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); saveCallMemo(r.id, callMemoVal); }
+                                  if (e.key === 'Escape') { e.preventDefault(); setEditingCallId(null); }
+                                }}
+                                style={{
+                                  width: '100%', fontSize: 12, padding: '3px 6px',
+                                  border: '1px solid var(--halo-400)', borderRadius: 4,
+                                  background: 'var(--bg)', color: 'var(--text)',
+                                  fontFamily: 'inherit', outline: 'none', resize: 'none',
+                                  boxSizing: 'border-box',
+                                }}
+                              />
+                            ) : (
+                              <span
+                                onClick={() => startEditCallMemo(r.id, r.memo)}
+                                title={r.memo || 'クリックでメモ入力'}
+                                style={{ fontSize: 12, cursor: 'text', color: r.memo ? 'var(--text)' : 'var(--muted)' }}
+                              >
+                                {r.memo || '— クリックでメモ入力'}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
-        </div>
-
-        <div className="cf-col" style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
-          <div className="cf-card" style={{ flex: 1 }}>
-            <div className="cf-card-head">
-              <Icon name="bolt" size={13} />
-              <span className="cf-section-title">女子への連絡事項</span>
-              <button className="cf-edit-btn" onClick={() => setEditing(editing === 'shared' ? null : 'shared')}>
-                <Icon name="edit" size={12} />
-              </button>
-            </div>
-            {editing === 'shared' ? (
-              <>
-                <textarea className="cf-memo-input" rows={4} value={form.shared_memo} onChange={upd('shared_memo')} />
-                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <button className="btn sm primary" onClick={() => saveField({ shared_memo: form.shared_memo || null })}>保存</button>
-                  <button className="btn sm" onClick={() => setEditing(null)}>キャンセル</button>
-                </div>
-              </>
-            ) : (
-              <p className="cf-lady-memo">{c.shared_memo || 'なし'}</p>
-            )}
-          </div>
-          <div className="cf-card cf-alert-card" style={{ flex: 1 }}>
-            <div className="cf-card-head">
-              <Icon name="bolt" size={13} style={{ color: 'var(--danger)' }} />
-              <span className="cf-section-title">要注意事項</span>
-              <button className="cf-edit-btn" onClick={() => setEditing(editing === 'alert' ? null : 'alert')}>
-                <Icon name="edit" size={12} />
-              </button>
-            </div>
-            {editing === 'alert' ? (
-              <>
-                <textarea className="cf-memo-input" rows={4} value={form.alert_memo} onChange={upd('alert_memo')} />
-                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <button className="btn sm primary" onClick={() => saveField({ alert_memo: form.alert_memo || null })}>保存</button>
-                  <button className="btn sm" onClick={() => setEditing(null)}>キャンセル</button>
-                </div>
-              </>
-            ) : (
-              <p className="cf-alert-text">{c.alert_memo || 'なし'}</p>
-            )}
-          </div>
-        </div>
+        )}
       </div>
-
-      {/* 利用履歴テーブル（全幅） */}
-      <ReservationHistory customerId={c.id} history={history} />
     </div>
   );
 }
 
-function ReservationHistory({ customerId, history: historyProp }) {
-  const [rows, setRows] = useState(historyProp ?? null);
+function ReservationHistory({ customerId, history: historyProp, totalCount, customer }) {
+  const [rows,    setRows]    = useState(historyProp ?? null);
+  const [total,   setTotal]   = useState(totalCount ?? 0);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (historyProp !== undefined) { setRows(historyProp); return; }
-    loadCustomerReservations(customerId).then(setRows);
-  }, [customerId, historyProp]);
+    if (historyProp !== undefined) {
+      setRows(historyProp);
+      setTotal(totalCount ?? historyProp?.length ?? 0);
+      return;
+    }
+    loadCustomerReservations(customerId).then(({ data, count }) => {
+      setRows(data);
+      setTotal(count);
+    });
+  }, [customerId, historyProp, totalCount]);
+
+  const reload = () => loadCustomerReservations(customerId).then(({ data, count }) => {
+    setRows(data);
+    setTotal(count);
+  });
+
+  const loadMore = async () => {
+    if (!rows || loading) return;
+    setLoading(true);
+    const { data } = await loadCustomerReservations(customerId, rows.length);
+    setRows(prev => [...prev, ...data]);
+    setLoading(false);
+  };
+
+  const handleEdit = (r) => {
+    openReservationWindow({
+      customer: customer || { id: r.customer_id },
+      reservation: r,
+      onSaved: reload,
+      onDeleted: reload,
+    });
+  };
 
   if (!rows) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>読み込み中...</div>;
   if (rows.length === 0) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>予約・来店記録なし</div>;
 
-  const STATUS = { reserved: '予約中', visited: '来店済', cancelled: 'キャンセル', no_show: '無断キャンセル' };
-  const STATUS_COLOR = { reserved: 'var(--warn)', visited: 'var(--ok)', cancelled: 'var(--muted)', no_show: 'var(--danger)' };
+  const STATUS       = { reserved: '予約中', received: '受領済', working: '対応中', complete: '完了', hold: '仮予約', cancelled: 'ｷｬﾝｾﾙ' };
+  const STATUS_COLOR = { reserved: 'var(--warn)', received: '#0ea5e9', working: '#8b5cf6', complete: 'var(--ok)', hold: 'var(--muted)', cancelled: 'var(--muted)' };
+
+  const rowBg = (status, i) => {
+    if (status === 'reserved' || status === 'hold') return '#fef08a'; // 黄
+    if (status === 'cancelled')                     return '#fecaca'; // 赤
+    return i % 2 === 0 ? 'transparent' : 'var(--bg-subtle)';         // デフォルト交互
+  };
+
+  const TH = { padding: '6px 8px', fontSize: 11, fontWeight: 700, color: 'var(--muted)', whiteSpace: 'nowrap', borderBottom: '2px solid var(--line)', background: 'var(--bg-subtle)', position: 'sticky', top: 0, zIndex: 1, textAlign: 'left' };
+  const TD = { padding: '6px 8px', fontSize: 12, borderBottom: '1px solid var(--line-2)', verticalAlign: 'middle', whiteSpace: 'nowrap' };
+
+  // selected_items からアイテムを種別で取り出すヘルパー
+  const itemOf  = (r, kind)  => r.selected_items?.find(i => i.kind === kind)?.name || '—';
+  const itemsOf = (r, kinds) => r.selected_items?.filter(i => kinds.includes(i.kind)).map(i => i.name).join(', ') || '—';
+
+  const remaining = total - (rows?.length ?? 0);
 
   return (
-    <div className="cd-tab-body">
-      <div className="rsv-history-list">
-        {rows.map((r) => (
-          <div key={r.id} className="rsv-row">
-            <div className="rsv-row-left">
-              <span className="mono rsv-date">{r.reserved_date}</span>
-              <span className="mono rsv-time">{r.start_time?.slice(0, 5) || '—'}</span>
-              <span className="rsv-lady">{r.ladies?.display_name || '—'}</span>
-              {r.course && <span className="chip" style={{ fontSize: 10, height: 18 }}>{r.course}</span>}
-            </div>
-            <div className="rsv-row-right">
-              {r.amount ? <span className="mono rsv-price">¥{r.amount.toLocaleString()}</span> : null}
-              <span style={{ fontSize: 11, fontWeight: 700, color: STATUS_COLOR[r.status] || 'var(--muted)' }}>
-                {STATUS[r.status] || r.status}
-              </span>
-            </div>
-          </div>
-        ))}
+    <div>
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+        <thead>
+          <tr>
+            <th style={TH}>日付</th>
+            <th style={TH}>開始時刻</th>
+            <th style={TH}>キャスト</th>
+            <th style={TH}>コース</th>
+            <th style={TH}>延長</th>
+            <th style={TH}>指名</th>
+            <th style={TH}>ホテル</th>
+            <th style={TH}>部屋番</th>
+            <th style={{ ...TH, textAlign: 'right' }}>料金</th>
+            <th style={TH}>メモ</th>
+            <th style={TH}>オプション</th>
+            <th style={TH}>カード</th>
+            <th style={TH}>交通費</th>
+            <th style={TH}>割引</th>
+            <th style={TH}>状態</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const ext      = r.selected_items?.find(s => s.kind === 'extension');
+            const nom      = r.selected_items?.find(s => s.kind === 'nomination');
+            const opts     = r.selected_items?.filter(s => s.kind === 'option').map(s => s.name).join(', ');
+            const transport = r.selected_items?.find(s => s.kind === 'transport');
+            const discount  = r.selected_items?.find(s => s.kind === 'discount');
+            return (
+              <tr
+                key={r.id}
+                onClick={() => handleEdit(r)}
+                style={{
+                  background: rowBg(r.status, i),
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'var(--halo-50, #eff6ff)'}
+                onMouseLeave={e => e.currentTarget.style.background = rowBg(r.status, i)}
+              >
+                <td style={{ ...TD, fontWeight: 600 }} className="mono">{r.reserved_date}</td>
+                <td style={TD} className="mono">{r.start_time?.slice(0,5) || '—'}</td>
+                <td style={{ ...TD, fontWeight: 600 }}>{r.ladies?.display_name || '—'}</td>
+                <td style={TD}>{r.course || r.selected_items?.find(i => i.kind === 'course')?.name || '—'}</td>
+                <td style={TD}>{ext ? ext.name : '—'}</td>
+                <td style={TD}>{nom ? nom.name : '—'}</td>
+                <td style={TD}>{r.hotel || r.selected_items?.find(i => i.kind === 'hotel')?.name || '—'}</td>
+                <td style={TD}>{r.room_no || '—'}</td>
+                <td style={{ ...TD, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: r.amount ? 600 : 400 }}>
+                  {r.amount ? `¥${r.amount.toLocaleString()}` : '—'}
+                </td>
+                <td style={{ ...TD, maxWidth: 140 }}>
+                  {r.memo ? (
+                    <span className="htip">
+                      {r.memo.replace(/\n/g, ' ↵ ')}
+                      <span className="htip-body">{r.memo}</span>
+                    </span>
+                  ) : '—'}
+                </td>
+                <td style={{ ...TD, maxWidth: 110 }}>
+                  {opts ? (
+                    <span className="htip">
+                      {opts}
+                      <span className="htip-body">{opts}</span>
+                    </span>
+                  ) : '—'}
+                </td>
+                <td style={TD}>
+                  {r.payment_method === 'card'
+                    ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#dbeafe', color: '#1d4ed8', fontWeight: 700 }}>CARD</span>
+                    : <span style={{ fontSize: 10, color: 'var(--muted)' }}>—</span>
+                  }
+                </td>
+                <td style={TD}>{transport ? transport.name : '—'}</td>
+                <td style={TD}>{discount ? discount.name : '—'}</td>
+                <td style={TD}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: STATUS_COLOR[r.status] || 'var(--muted)' }}>
+                    {STATUS[r.status] || r.status}
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+    {remaining > 0 && (
+      <div style={{ textAlign: 'center', padding: '10px 0 12px' }}>
+        <button
+          onClick={loadMore}
+          disabled={loading}
+          style={{
+            padding: '6px 20px', fontSize: 12, borderRadius: 6,
+            border: '1px solid var(--line)', background: 'var(--bg-subtle)',
+            color: 'var(--muted)', cursor: loading ? 'default' : 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          {loading ? '読み込み中...' : `さらに読み込む（残 ${remaining} 件）`}
+        </button>
       </div>
+    )}
     </div>
   );
 }

@@ -65,7 +65,7 @@ export default function Incoming() {
   const unanswered = rows.filter((r) => r.callback_status === 'none').length;
   const done = rows.filter((r) => r.callback_status === 'done').length;
 
-  const COLS = '70px 140px 150px 80px 80px 1fr 110px 80px';
+  const COLS = '70px 140px 150px 80px 80px 1fr 110px 100px 80px';
 
   return (
     <div className="inc-root">
@@ -105,6 +105,7 @@ export default function Incoming() {
               <div>種別</div>
               <div>メモ</div>
               <div>折り返し</div>
+              <div>対応者</div>
               <div></div>
             </div>
             {rows.map((r) => {
@@ -137,32 +138,40 @@ export default function Incoming() {
                   </div>
                   <div className="ht-memo">
                     {editingMemo === r.id ? (
-                      <input
+                      <textarea
                         ref={memoInputRef}
-                        type="text"
                         value={memoVal}
                         onChange={(e) => setMemoVal(e.target.value)}
                         onBlur={() => saveMemo(r.id, memoVal)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); saveMemo(r.id, memoVal); }
-                          if (e.key === 'Escape') { setEditingMemo(null); }
+                          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); saveMemo(r.id, memoVal); }
+                          if (e.key === 'Escape') { e.preventDefault(); setEditingMemo(null); }
+                          // Enter単体はデフォルト動作（改行）をそのまま通す
                         }}
+                        rows={3}
                         style={{
                           width: '100%', padding: '3px 6px',
                           border: '1px solid var(--halo-400, #60a5fa)',
                           borderRadius: 4, fontSize: 12,
                           background: 'var(--bg)', color: 'var(--text)',
                           fontFamily: 'inherit', outline: 'none',
-                          boxSizing: 'border-box',
+                          boxSizing: 'border-box', resize: 'vertical',
+                          lineHeight: 1.5,
                         }}
                       />
                     ) : (
                       <span
                         onClick={() => startEditMemo(r.id, r.memo)}
-                        title="クリックで編集"
-                        style={{ cursor: 'text', display: 'block', minHeight: 22 }}
+                        title={r.memo || 'クリックで入力'}
+                        style={{
+                          cursor: 'text', display: 'block', minHeight: 22,
+                          overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
+                        }}
                       >
-                        {r.memo || <span className="ht-memo-empty">クリックで入力</span>}
+                        {r.memo
+                          ? r.memo.replace(/\n/g, ' ↵ ')
+                          : <span className="ht-memo-empty">クリックで入力</span>
+                        }
                       </span>
                     )}
                   </div>
@@ -175,8 +184,20 @@ export default function Incoming() {
                       {CB_LABEL[r.callback_status || 'none']}
                     </button>
                   </div>
+                  <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                    {/* 対応者: acknowledged_by → handled_by の順で表示 */}
+                    {(r.acknowledged_staff?.name || r.handled_staff?.name) ? (
+                      <span title={`対応: ${r.acknowledged_at ? new Date(r.acknowledged_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''}`}>
+                        {r.acknowledged_staff?.name || r.handled_staff?.name}
+                      </span>
+                    ) : r.ui_status === 'ended' ? (
+                      <span style={{ color: 'var(--mutedest)' }}>終了</span>
+                    ) : r.ui_status && r.ui_status !== 'ringing' ? (
+                      <span>{r.ui_status}</span>
+                    ) : null}
+                  </div>
                   <div className="ht-actions">
-                    <button className="btn sm ghost icon" title="電話"><Icon name="phone" size={12} /></button>
+                    {/* 折り返し電話発信は未実装のため非表示 */}
                   </div>
                 </div>
               );

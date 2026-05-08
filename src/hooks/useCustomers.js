@@ -33,14 +33,16 @@ export function useCustomers() {
   return { customers: allCustomers, loading, reload: load };
 }
 
-export async function loadCustomerReservations(customerId) {
-  const { data } = await supabase
+export const RESV_PAGE_SIZE = 50;
+
+export async function loadCustomerReservations(customerId, offset = 0) {
+  const { data, count } = await supabase
     .from('reservations')
-    .select('*, ladies(display_name)')
+    .select('*, ladies(display_name)', { count: 'exact' })
     .eq('customer_id', customerId)
     .order('reserved_date', { ascending: false })
-    .limit(50);
-  return data || [];
+    .range(offset, offset + RESV_PAGE_SIZE - 1);
+  return { data: data || [], count: count ?? 0 };
 }
 
 // phone_normalized (+819037...) から末尾10桁でilike検索 → from_number フォーマットを問わず一致
@@ -68,5 +70,6 @@ export async function saveCustomer(id, patch) {
     .eq('id', id)
     .select()
     .single();
+  if (error) console.error('[saveCustomer]', error.message, error.details, patch);
   return { data, error };
 }

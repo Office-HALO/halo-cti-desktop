@@ -50,22 +50,36 @@ Deno.serve(async (req: Request) => {
 
   console.log(`[twilio-webhook] ${callStatus} from=${fromNumber} to=${toNumber} sid=${callSid}`);
 
-  // Supabase に着信ログを登録
+  // Supabase に着信ログを登録（service_role で store_id 参照）
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
 
+  // to_number から店舗を特定する
+  // stores.twilio_number が未設定の場合は null になり、UI側でフィルタ不可（全店表示）
+  let storeId: string | null = null;
+  if (toNumber) {
+    const { data: store } = await supabase
+      .from('stores')
+      .select('id')
+      .eq('twilio_number', toNumber)
+      .maybeSingle();
+    storeId = store?.id ?? null;
+  }
+
   const { error } = await supabase.from('call_logs').upsert(
     {
-      call_sid:        callSid,
+      twilio_call_sid: callSid,      // 実DB列名
       from_number:     fromNumber,
       to_number:       toNumber,
       started_at:      new Date().toISOString(),
-      status:          callStatus,
+      source:          'twilio',
       callback_status: 'none',
+      ui_status:       'ringing',    // 着信時は常に ringing
+      store_id:        storeId,      // stores.twilio_number 設定後に有効
     },
-    { onConflict: 'call_sid' }, // 同一通話の重複通知をスキップ
+    { onConflict: 'twilio_call_sid' }, // 実DB unique 列名
   );
   if (error) console.error('[twilio-webhook] DB error:', error.message);
 

@@ -3,10 +3,23 @@ import Icon from '../components/Icon.jsx';
 import { supabase } from '../lib/supabase.js';
 import { saveCustomer, loadCustomerReservations, loadCustomerCallLogs } from '../hooks/useCustomers.js';
 import { formatCallTime } from '../lib/utils.js';
+import { useHistoryCols } from '../lib/historyCols.js';
 import { showToast } from '../lib/toast.js';
 import { openReservationWindow } from '../lib/reservationWindowBridge.js';
 
 const RANK_CHIP = { VIP: 'gold', A: 'green', B: 'blue', NG: 'red', 優良: 'green', CB決済: 'blue' };
+
+const STATUS_LABEL = { reserved: '予約中', cancelled: 'キャンセル', received: '受領済', キャンセル: 'キャンセル', 予約中: '予約中', 受領済: '受領済' };
+function statusBg(s)    { return s === 'cancelled' || s === 'キャンセル' ? '#fca5a5' : s === 'reserved' || s === '予約中' ? '#fde68a' : undefined; }
+function statusColor(s) { return s === 'cancelled' || s === 'キャンセル' ? '#991b1b' : s === 'reserved' || s === '予約中' ? '#92400e' : s === 'received' || s === '受領済' ? '#1e40af' : 'var(--muted)'; }
+
+const DOW = ['日','月','火','水','木','金','土'];
+function fmtDate(dateStr) {
+  if (!dateStr) return '—';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dow = new Date(y, m - 1, d).getDay();
+  return `${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}(${DOW[dow]})`;
+}
 
 function todayDateStr() {
   const d = new Date();
@@ -19,6 +32,7 @@ function todayTimeStr() {
 }
 
 export default function CustomerFloat({ customerId, phone, onClose }) {
+  const { visibleDefs, getColWidth, setColWidth } = useHistoryCols();
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [minimized, setMinimized] = useState(false);
@@ -30,7 +44,26 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   const [memoDraft, setMemoDraft] = useState('');
   const [showMemoAdd, setShowMemoAdd] = useState(false);
   const [newMemo, setNewMemo] = useState('');
-  const startRef = useRef(null);
+  const [selectedRsv, setSelectedRsv] = useState(null);
+  const startRef    = useRef(null);
+  const resizeState = useRef(null);
+
+  const startColResize = useCallback((id, e) => {
+    e.preventDefault(); e.stopPropagation();
+    resizeState.current = { id, startX: e.clientX, startW: getColWidth(id) };
+    function onMove(me) {
+      if (!resizeState.current) return;
+      const { id, startX, startW } = resizeState.current;
+      setColWidth(id, startW + me.clientX - startX);
+    }
+    function onUp() {
+      resizeState.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup',   onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup',   onUp);
+  }, [getColWidth, setColWidth]);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +73,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
       if (cancelled) return;
       setC(data || null);
       setMemoDraft(data?.shared_memo || data?.alert_memo || '');
-      const [rows, logs] = await Promise.all([
+      const [{ data: rows }, logs] = await Promise.all([
         loadCustomerReservations(customerId),
         loadCustomerCallLogs(data?.phone_normalized || phone, 10),
       ]);
@@ -92,6 +125,14 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
+
+  // 利用履歴エリア外クリックで選択解除
+  useEffect(() => {
+    if (!selectedRsv) return;
+    const handle = () => setSelectedRsv(null);
+    window.addEventListener('click', handle);
+    return () => window.removeEventListener('click', handle);
+  }, [selectedRsv]);
 
   const saveMemo = async () => {
     const { data, error } = await saveCustomer(customerId, { alert_memo: memoDraft || null });
@@ -253,7 +294,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                     <div className="cf-card" style={{ flex: 1 }}>
                       <div className="cf-card-head">
                         <Icon name="phoneIn" size={13} />
-                        <span className="cf-section-title">着信履歴</span>
+                        <span className="cf-section-title">着信メモ</span>
                       </div>
                       {callLogs.length === 0 ? (
                         <div style={{ fontSize: 12, color: 'var(--muted)' }}>着信記録なし</div>
@@ -320,36 +361,52 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                     <div style={{ padding: 30, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>利用履歴なし</div>
                   ) : (
                     <div className="cf-hist-table-wrap">
-                      <table className="cf-hist-table">
+                      <table style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 'max-content' }}>
                         <thead>
                           <tr>
-                            <th>開始日時</th>
-                            <th>終了時刻</th>
-                            <th>オペ</th>
-                            <th>電話番号</th>
-                            <th>顧客名</th>
-                            <th>基本</th>
-                            <th>指名</th>
-                            <th>場所/ホテル</th>
-                            <th>メモ</th>
-                            <th>部屋NO</th>
-                            <th>合計</th>
+                            {visibleDefs.map((col) => (
+                              <th key={col.id} style={{ position: 'relative', width: getColWidth(col.id), padding: '3px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, fontWeight: 700, border: '1px solid var(--line)', background: 'var(--surface)', userSelect: 'none' }}>
+                                {col.label}
+                                <div onMouseDown={(e) => startColResize(col.id, e)} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 5, cursor: 'col-resize', zIndex: 1 }} />
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
                           {history.map((r) => (
-                            <tr key={r.id} onClick={() => setEditRsv(r)} style={{ cursor: 'pointer' }} title="クリックで編集">
-                              <td className="mono">{r.reserved_date} {r.start_time?.slice(0, 5)}</td>
-                              <td className="mono">{r.end_time?.slice(0, 5) || '—'}</td>
-                              <td>{r.operator || '—'}</td>
-                              <td className="mono">{(c.phone_normalized || '').replace(/-/g, '')}</td>
-                              <td>{c.name || '—'}</td>
-                              <td>{r.course || '—'}</td>
-                              <td>{r.ladies?.display_name || '—'}</td>
-                              <td>{r.hotel || '—'}</td>
-                              <td>{r.memo ? '●' : '—'}</td>
-                              <td className="mono">{r.room_no || '—'}</td>
-                              <td className="mono">{r.amount ? '¥' + r.amount.toLocaleString() : '—'}</td>
+                            <tr key={r.id} onClick={(e) => { e.stopPropagation(); setSelectedRsv(r); c && openReservationWindow({ customer: c, reservation: r, onSaved: async () => { const { data: rows } = await loadCustomerReservations(customerId); setHistory(rows); setSelectedRsv(null); }, onDeleted: async () => { const { data: rows } = await loadCustomerReservations(customerId); setHistory(rows); setSelectedRsv(null); } }); }} style={{ cursor: 'pointer' }} title="クリックで編集">
+                              {visibleDefs.map((col) => {
+                                const mono  = ['date','start','end','phone','room_no','amount','course','extension'].includes(col.id);
+                                const tdBg  = selectedRsv?.id === r.id ? '#c4b5fd' : statusBg(r.status);
+                                let cell;
+                                switch (col.id) {
+                                  case 'date':     cell = fmtDate(r.reserved_date); break;
+                                  case 'start':    cell = r.start_time?.slice(0, 5) || '—'; break;
+                                  case 'end':      cell = r.end_time?.slice(0, 5) || '—'; break;
+                                  case 'operator': cell = r.operator || '—'; break;
+                                  case 'phone':    cell = (c.phone_normalized || '').replace(/-/g, ''); break;
+                                  case 'customer': cell = c.name || '—'; break;
+                                  case 'course':   { const v = r.course || ''; cell = v ? v.replace(/分.*$/, '') : '—'; break; }
+                                  case 'lady':       cell = r.ladies?.display_name || '—'; break;
+                                  case 'nomination': cell = r.nomination_type || '—'; break;
+                                  case 'extension':  { const v = r.extension || ''; const m = v.match(/(\d+)/); cell = m ? m[1] : '—'; break; }
+                                  case 'option':     cell = r.option_label || '—'; break;
+                                  case 'discount':   cell = r.discount_amount ? '-¥' + r.discount_amount.toLocaleString() : '—'; break;
+                                  case 'transport':  cell = r.transport_price ? '¥' + r.transport_price.toLocaleString() : '—'; break;
+                                  case 'status': {
+                                    const s = r.status || '';
+                                    const label = STATUS_LABEL[s] || s || '—';
+                                    cell = <span style={{ color: statusColor(s), fontWeight: 700, fontSize: 11 }}>{label}</span>;
+                                    break;
+                                  }
+                                  case 'hotel':    cell = r.hotel || '—'; break;
+                                  case 'memo':     cell = r.memo ? '●' : '—'; break;
+                                  case 'room_no':  cell = r.room_no || '—'; break;
+                                  case 'amount':   cell = r.amount ? '¥' + r.amount.toLocaleString() : '—'; break;
+                                  default:         cell = '—';
+                                }
+                                return <td key={col.id} style={{ padding: '2px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, border: '1px solid var(--line)', ...(mono ? { fontFamily: 'monospace' } : {}), ...(tdBg ? { background: tdBg } : {}) }}>{cell}</td>;
+                              })}
                             </tr>
                           ))}
                         </tbody>
@@ -369,7 +426,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                 className="cf-btn primary"
                 onClick={() => c && openReservationWindow({
                   customer: c,
-                  onSaved: async () => { const rows = await loadCustomerReservations(customerId); setHistory(rows); },
+                  onSaved: async () => { const { data: rows } = await loadCustomerReservations(customerId); setHistory(rows); },
                 })}
               ><Icon name="plus" size={13} />新規予約</button>
             </div>
