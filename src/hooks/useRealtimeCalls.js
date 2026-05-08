@@ -1,37 +1,38 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { normalizePhone } from '../lib/utils.js';
 
 /**
  * Realtime で call_logs の INSERT を購読し、ポップアップを起動する。
  *
+ * DB レベルのフィルターは使わず JS 側で store_id を照合する。
+ * → store_id=null（twilio_number 未設定）でも確実に受信できる。
+ *
  * @param {function} onIncoming - { callLogId, phone, customer } を受け取るコールバック
- * @param {string|null} currentStoreId - 現在の店舗ID。stores.twilio_number が設定されていれば
- *   自店舗宛の着信だけを受信する。null の場合は全着信を受信（初期状態の後退動作）。
+ * @param {string|null} currentStoreId - 現在の店舗ID
  */
 export function useRealtimeCalls(onIncoming, currentStoreId) {
-  useEffect(() => {
-    // store_id が確定していれば Realtime RowFilter で絞る。
-    // stores.twilio_number 未設定（storeId=null な行）は filterなしチャンネルで受け取る。
-    const filter = currentStoreId ? `store_id=eq.${currentStoreId}` : undefined;
+  // 最新の currentStoreId を ref で保持（依存変化でチャンネルを再作成しない）
+  const storeIdRef = useRef(currentStoreId);
+  useEffect(() => { storeIdRef.current = currentStoreId; }, [currentStoreId]);
 
+  useEffect(() => {
     const channel = supabase
-      .channel(`call_logs_insert_${currentStoreId ?? 'all'}`)
+      .channel('call_logs_insert')
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'call_logs',
-          ...(filter ? { filter } : {}),
-        },
+        { event: 'INSERT', schema: 'public', table: 'call_logs' },
         async (payload) => {
           const row = payload.new;
           if (!row) return;
 
           // 他スタッフが既にclaim済みの着信はポップアップしない
-          // （ui_statusがringing以外 = INSERT時点で既にclaim中の再upsert）
           if (row.ui_status && row.ui_status !== 'ringing') return;
+
+          // store_id が設定されている場合は自店舗のみ受け取る
+          // store_id=null（twilio_number 未設定）は全スタッフに通知
+          const sid = storeIdRef.current;
+          if (row.store_id && sid && row.store_id !== sid) return;
 
           const fromNumber = row.from_number || '';
           const normalized = normalizePhone(fromNumber);
@@ -54,5 +55,5 @@ export function useRealtimeCalls(onIncoming, currentStoreId) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [onIncoming, currentStoreId]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 }
