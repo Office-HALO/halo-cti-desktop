@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Icon from '../components/Icon.jsx';
 import Avatar from '../components/Avatar.jsx';
+import Combobox from '../components/Combobox.jsx';
 import { supabase } from '../lib/supabase.js';
 import { useAppStore } from '../store/state.js';
 import { showToast } from '../lib/toast.js';
@@ -126,33 +127,29 @@ export default function Cast() {
 }
 
 function CastListView({ ladies, ranks, onSelect }) {
-  const stores = useAppStore((s) => s.stores);
+  const karteMap = useAppStore((s) => s.karteMap);
   const rankMap = Object.fromEntries(ranks.map((r) => [r.id, r.label]));
 
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
       <thead>
         <tr style={{ background: 'var(--bg-subtle)', position: 'sticky', top: 0, zIndex: 1 }}>
-          <th style={TH}>#</th>
-          <th style={TH}>源氏名</th>
-          <th style={TH}>本名</th>
+          <th style={TH}>表記名</th>
+          <th style={TH}>管理名</th>
+          <th style={TH}>ヨミガナ</th>
           <th style={TH}>ランク</th>
-          <th style={TH}>タグ / DUO</th>
-          <th style={{ ...TH, minWidth: 200 }}>メモ</th>
+          <th style={TH}>タグ</th>
+          <th style={{ ...TH, minWidth: 180 }}>メモ</th>
+          <th style={TH}>カルテ連携</th>
           <th style={TH}>状況</th>
         </tr>
       </thead>
       <tbody>
-        {ladies.map((l, i) => {
+        {ladies.map((l) => {
           const p = l.profile || {};
-          const chips = [];
-          if (p.duo === true) chips.push({ label: 'DUO可', cls: 'green' });
-          if (p.duo === false) chips.push({ label: 'DUO不可', cls: 'red' });
-          if (p.tattoo) chips.push({ label: 'タトゥー', cls: 'amber' });
-          (p.ng_areas || []).forEach((a) => chips.push({ label: `NG:${a}`, cls: 'red' }));
-          (p.tags || []).forEach((t) => chips.push({ label: t, cls: '' }));
-          const storeName = stores.find((s) => s.id === l.store_id)?.name || '';
+          const tags = (p.extra_tags || []);
           const rankLabel = l.cast_rank_id ? (rankMap[l.cast_rank_id] || '—') : '—';
+          const karte = karteMap[l.id];
 
           return (
             <tr
@@ -162,26 +159,38 @@ function CastListView({ ladies, ranks, onSelect }) {
               onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-subtle)'}
               onMouseLeave={(e) => e.currentTarget.style.background = ''}
             >
-              <td style={TD}>{i + 1}</td>
-              <td style={{ ...TD, fontWeight: 600 }}>
-                {l.display_name || l.name || '—'}
-                {storeName && <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 400 }}>{storeName}</div>}
-              </td>
+              <td style={{ ...TD, fontWeight: 600 }}>{l.display_name || '—'}</td>
               <td style={{ ...TD, color: 'var(--muted)' }}>{l.name || '—'}</td>
+              <td style={{ ...TD, color: 'var(--muted)', fontSize: 12 }}>{p.furigana || '—'}</td>
               <td style={TD}>
-                <span style={{ fontSize: 11, background: 'var(--bg-subtle)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 4 }}>
-                  {rankLabel}
-                </span>
+                {l.cast_rank_id ? (
+                  <span style={{ fontSize: 11, background: 'var(--bg-subtle)', border: '1px solid var(--border)', padding: '1px 6px', borderRadius: 4 }}>
+                    {rankLabel}
+                  </span>
+                ) : <span style={{ color: 'var(--muted)' }}>—</span>}
               </td>
               <td style={TD}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                  {chips.slice(0, 4).map((c, j) => (
-                    <span key={j} className={'chip ' + c.cls} style={{ height: 16, padding: '0 5px', fontSize: 9 }}>{c.label}</span>
+                  {tags.slice(0, 4).map((t, j) => (
+                    <span key={j} className="chip" style={{ height: 16, padding: '0 5px', fontSize: 9 }}>{t}</span>
                   ))}
                 </div>
               </td>
-              <td style={{ ...TD, color: 'var(--muted)', maxWidth: 300 }}>
+              <td style={{ ...TD, color: 'var(--muted)', maxWidth: 240 }}>
                 <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.memo || ''}</div>
+              </td>
+              <td style={TD}>
+                {karte ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    {karte.photo_url
+                      ? <img src={karte.photo_url} style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }} />
+                      : <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--border)' }} />
+                    }
+                    <span style={{ fontSize: 11, color: '#16a34a', fontWeight: 600 }}>連携済み</span>
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>—</span>
+                )}
               </td>
               <td style={TD}>
                 <span className={'chip ' + (l.is_active ? 'green' : '')} style={{ fontSize: 10 }}>
@@ -206,11 +215,8 @@ function CastCard({ lady, onClick }) {
   const hue = hashHue(name);
   const storeName = stores.find((s) => s.id === lady.store_id)?.name || lady.store_code || '';
   const tags = [];
-  if (p.duo === true) tags.push({ label: 'DUO可', cls: 'green' });
-  if (p.duo === false) tags.push({ label: 'DUO不可', cls: 'red' });
-  if (p.tattoo) tags.push({ label: 'タトゥー有', cls: 'amber' });
   (p.ng_areas || []).forEach((a) => tags.push({ label: `NG: ${a}`, cls: 'red' }));
-  (p.tags || []).forEach((t) => tags.push({ label: t, cls: '' }));
+  (p.extra_tags || []).forEach((t) => tags.push({ label: t, cls: '' }));
 
   return (
     <div className={'cast-card' + (lady.is_active ? '' : ' cast-card-inactive')} onClick={onClick}>
@@ -237,6 +243,8 @@ function CastCard({ lady, onClick }) {
 function LadyModal({ lady, onClose, onSaved }) {
   const stores = useAppStore((s) => s.stores);
   const currentStoreId = useAppStore((s) => s.currentStoreId);
+  const karteMap = useAppStore((s) => s.karteMap);
+  const setKarteMap = useAppStore((s) => s.setKarteMap);
   const isNew = !lady?.id;
   const initial = lady || {};
   const initialP = initial.profile || {};
@@ -245,14 +253,51 @@ function LadyModal({ lady, onClose, onSaved }) {
   const [storeId, setStoreId] = useState(initial.store_id || currentStoreId || '');
   const [castRankId, setCastRankId] = useState(initial.cast_rank_id || '');
   const [isActive, setIsActive] = useState(isNew ? true : !!initial.is_active);
-  const [duo, setDuo] = useState(initialP.duo === true ? 'yes' : initialP.duo === false ? 'no' : '');
-  const [tattoo, setTattoo] = useState(!!initialP.tattoo);
+  const [furigana, setFurigana] = useState(initialP.furigana || '');
   const [ngAreas, setNgAreas] = useState((initialP.ng_areas || []).join('、'));
+  const [tagStr, setTagStr] = useState((initialP.extra_tags || []).join(', '));
   const [tagsStr, setTagsStr] = useState((initialP.tags || []).join(', '));
   const [memo, setMemo] = useState(initialP.memo || '');
   const [loading, setLoading] = useState(false);
   const [confirmRetire, setConfirmRetire] = useState(false);
   const [ranks, setRanks] = useState([]);
+  const linkedKarte = lady?.id ? karteMap[lady.id] : null;
+  const [karteId, setKarteId] = useState(() => linkedKarte?.id || null);
+  const [karteList, setKarteList] = useState([]);
+  const [formFields, setFormFields] = useState([]);
+  const [formOptions, setFormOptions] = useState({});
+  const [customValues, setCustomValues] = useState(initialP.custom || {});
+
+  useEffect(() => {
+    supabase.from('karte').select('id, name, 稼働状態, photo_url').order('name')
+      .then(({ data }) => {
+        setKarteList((data || []).map(k => ({
+          id: k.id, name: k.name || '—', sub: k.稼働状態 || '', photo_url: k.photo_url,
+        })));
+      });
+    supabase.from('lady_form_fields').select('*').order('sort_order')
+      .then(({ data: defs }) => {
+        setFormFields(defs || []);
+        const selects = (defs || []).filter(f => f.field_type === 'select');
+        if (selects.length > 0) {
+          supabase.from('lady_field_options')
+            .select('*').in('field_key', selects.map(f => f.field_key)).order('sort_order')
+            .then(({ data: opts }) => {
+              const map = {};
+              for (const o of opts || []) {
+                if (!map[o.field_key]) map[o.field_key] = [];
+                map[o.field_key].push(o);
+              }
+              setFormOptions(map);
+            });
+        }
+      });
+  }, []);
+
+  const isVisible = (key) => {
+    const def = formFields.find(f => f.field_key === key);
+    return formFields.length === 0 || !def || def.is_visible;
+  };
 
   const hue = hashHue(displayName || name || '?');
 
@@ -272,11 +317,12 @@ function LadyModal({ lady, onClose, onSaved }) {
     setLoading(true);
     const profile = {
       ...initialP,
-      duo: duo === 'yes' ? true : duo === 'no' ? false : null,
-      tattoo,
+      furigana: furigana.trim() || null,
       ng_areas: ngAreas.split(/[、,\s]+/).map((s) => s.trim()).filter(Boolean),
+      extra_tags: tagStr.split(',').map((s) => s.trim()).filter(Boolean),
       tags: tagsStr.split(',').map((s) => s.trim()).filter(Boolean),
       memo: memo.trim() || null,
+      custom: customValues,
     };
     const selectedStore = stores.find((s) => s.id === storeId);
     const payload = {
@@ -296,8 +342,26 @@ function LadyModal({ lady, onClose, onSaved }) {
     } else {
       resp = await supabase.from('ladies').update(payload).eq('id', lady.id).select().single();
     }
+    if (resp.error) { setLoading(false); showToast('error', '保存失敗: ' + resp.error.message); return; }
+
+    // カルテ連携の更新
+    const savedLadyId = resp.data?.id || lady?.id;
+    const prevKarteId = linkedKarte?.id || null;
+    if (savedLadyId && karteId !== prevKarteId) {
+      if (prevKarteId) {
+        await supabase.from('karte').update({ lady_id: null }).eq('id', prevKarteId);
+      }
+      if (karteId) {
+        await supabase.from('karte').update({ lady_id: savedLadyId }).eq('id', karteId);
+      }
+      // karteMapを再ロード
+      const { data: km } = await supabase.from('karte').select('id, lady_id, photo_url').not('lady_id', 'is', null);
+      const map = {};
+      for (const row of km || []) map[row.lady_id] = { id: row.id, photo_url: row.photo_url };
+      setKarteMap(map);
+    }
+
     setLoading(false);
-    if (resp.error) { showToast('error', '保存失敗: ' + resp.error.message); return; }
     showToast('success', isNew ? 'キャストを登録しました' : '更新しました');
     onSaved?.();
     onClose();
@@ -349,62 +413,152 @@ function LadyModal({ lady, onClose, onSaved }) {
 
         <div className="nr-body">
           <div className="nr-grid">
+            {/* 表記名・管理名は常に表示 */}
             <label className="nr-field">
-              <span>源氏名</span>
+              <span>表記名（源氏名）</span>
               <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="例: 桐谷 奈々美" />
             </label>
             <label className="nr-field">
-              <span>本名</span>
+              <span>管理名（本名）</span>
               <input type="text" value={name} onChange={(e) => setName(e.target.value)} />
             </label>
-            <label className="nr-field">
-              <span>店舗</span>
-              <select value={storeId} onChange={(e) => { setStoreId(e.target.value); setCastRankId(''); }}>
-                <option value="">— 未設定 —</option>
-                {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </label>
-            <label className="nr-field nr-full">
-              <span>キャストランク</span>
-              <select value={castRankId} onChange={(e) => setCastRankId(e.target.value)} disabled={!storeId}>
-                <option value="">— 未設定 —</option>
-                {ranks.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-              </select>
-            </label>
-            <label className="nr-field">
-              <span>在籍状況</span>
-              <select value={isActive ? '1' : '0'} onChange={(e) => setIsActive(e.target.value === '1')}>
-                <option value="1">在籍中</option>
-                <option value="0">退職</option>
-              </select>
-            </label>
-            <label className="nr-field">
-              <span>DUO</span>
-              <select value={duo} onChange={(e) => setDuo(e.target.value)}>
-                <option value="">未設定</option>
-                <option value="yes">可</option>
-                <option value="no">不可</option>
-              </select>
-            </label>
-            <label className="nr-field">
-              <span>タトゥー</span>
-              <select value={tattoo ? '1' : '0'} onChange={(e) => setTattoo(e.target.value === '1')}>
-                <option value="0">なし</option>
-                <option value="1">あり</option>
-              </select>
-            </label>
-            <label className="nr-field nr-full">
-              <span>NGエリア(読点 or カンマ区切り)</span>
-              <input type="text" value={ngAreas} onChange={(e) => setNgAreas(e.target.value)} placeholder="例: 心斎橋、難波" />
-            </label>
-            <label className="nr-field nr-full">
-              <span>タグ(カンマ区切り)</span>
-              <input type="text" value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="例: 人気, 新人" />
-            </label>
-            <label className="nr-field nr-full">
-              <span>メモ</span>
-              <textarea rows={3} value={memo} onChange={(e) => setMemo(e.target.value)} />
-            </label>
+
+            {/* DB設定に基づく動的フィールド */}
+            {formFields.map((field) => {
+              if (!field.is_visible) return null;
+              switch (field.field_key) {
+                case 'store':
+                  return (
+                    <label key="store" className="nr-field">
+                      <span>{field.label}</span>
+                      <select value={storeId} onChange={(e) => { setStoreId(e.target.value); setCastRankId(''); }}>
+                        <option value="">— 未設定 —</option>
+                        {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </label>
+                  );
+                case 'cast_rank':
+                  return (
+                    <label key="cast_rank" className="nr-field nr-full">
+                      <span>{field.label}</span>
+                      <select value={castRankId} onChange={(e) => setCastRankId(e.target.value)} disabled={!storeId}>
+                        <option value="">— 未設定 —</option>
+                        {ranks.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                      </select>
+                    </label>
+                  );
+                case 'status':
+                  return (
+                    <label key="status" className="nr-field nr-full">
+                      <span>{field.label}</span>
+                      <select value={isActive ? '1' : '0'} onChange={(e) => setIsActive(e.target.value === '1')}>
+                        <option value="1">在籍中</option>
+                        <option value="0">退職</option>
+                      </select>
+                    </label>
+                  );
+                case 'furigana':
+                  return (
+                    <label key="furigana" className="nr-field nr-full">
+                      <span>{field.label}</span>
+                      <input type="text" value={furigana} onChange={(e) => setFurigana(e.target.value)} placeholder="例: キリタニ ナナミ" />
+                    </label>
+                  );
+                case 'ng_areas':
+                  return (
+                    <label key="ng_areas" className="nr-field nr-full">
+                      <span>{field.label}（読点 or カンマ区切り）</span>
+                      <input type="text" value={ngAreas} onChange={(e) => setNgAreas(e.target.value)} placeholder="例: 心斎橋、難波" />
+                    </label>
+                  );
+                case 'extra_tags':
+                  return (
+                    <label key="extra_tags" className="nr-field nr-full">
+                      <span>{field.label}（カンマ区切り）</span>
+                      <input type="text" value={tagStr} onChange={(e) => setTagStr(e.target.value)} placeholder="例: 人気, 新人" />
+                    </label>
+                  );
+                case 'tags':
+                  return (
+                    <label key="tags" className="nr-field nr-full">
+                      <span>{field.label}（カンマ区切り）</span>
+                      <input type="text" value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="例: スレンダー, ロリ系" />
+                    </label>
+                  );
+                case 'memo':
+                  return (
+                    <label key="memo" className="nr-field nr-full">
+                      <span>{field.label}</span>
+                      <textarea rows={3} value={memo} onChange={(e) => setMemo(e.target.value)} />
+                    </label>
+                  );
+                case 'karte':
+                  return (
+                    <div key="karte" className="nr-field nr-full">
+                      <span style={{ display: 'block', marginBottom: 4, fontSize: 12, color: 'var(--muted)', fontWeight: 600 }}>
+                        {field.label}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {karteId && (() => {
+                          const k = karteList.find(k => k.id === karteId);
+                          return k?.photo_url
+                            ? <img src={k.photo_url} style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+                            : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--border)', flexShrink: 0 }} />;
+                        })()}
+                        <Combobox
+                          items={[{ id: '__none__', name: '— 未連携 —' }, ...karteList.map(k => ({
+                            id: k.id, name: k.name + (k.sub ? `（${k.sub}）` : ''),
+                          }))]}
+                          value={karteId || '__none__'}
+                          onChange={(id) => setKarteId(id === '__none__' ? null : id)}
+                          placeholder="カルテを検索して選択..."
+                          style={{ ...INP, padding: '6px 10px' }}
+                        />
+                        {karteId && (
+                          <button type="button" className="btn sm ghost" onClick={() => setKarteId(null)} style={{ flexShrink: 0, fontSize: 11 }}>
+                            解除
+                          </button>
+                        )}
+                      </div>
+                      {karteId && karteId !== (linkedKarte?.id || null) && (
+                        <p style={{ fontSize: 11, color: 'var(--halo-600)', marginTop: 4 }}>
+                          ※ 保存すると連携が更新されます
+                        </p>
+                      )}
+                    </div>
+                  );
+                default: {
+                  // カスタムフィールド
+                  const val = customValues[field.field_key] || '';
+                  if (field.field_type === 'select') {
+                    const opts = formOptions[field.field_key] || [];
+                    return (
+                      <label key={field.field_key} className="nr-field nr-full">
+                        <span>{field.label}</span>
+                        <select value={val} onChange={e => setCustomValues(v => ({ ...v, [field.field_key]: e.target.value }))}>
+                          <option value="">— 未設定 —</option>
+                          {opts.map(o => <option key={o.id} value={o.label}>{o.label}</option>)}
+                        </select>
+                      </label>
+                    );
+                  }
+                  if (field.field_type === 'textarea') {
+                    return (
+                      <label key={field.field_key} className="nr-field nr-full">
+                        <span>{field.label}</span>
+                        <textarea rows={3} value={val} onChange={e => setCustomValues(v => ({ ...v, [field.field_key]: e.target.value }))} />
+                      </label>
+                    );
+                  }
+                  return (
+                    <label key={field.field_key} className="nr-field nr-full">
+                      <span>{field.label}</span>
+                      <input type="text" value={val} onChange={e => setCustomValues(v => ({ ...v, [field.field_key]: e.target.value }))} />
+                    </label>
+                  );
+                }
+              }
+            })}
           </div>
         </div>
 

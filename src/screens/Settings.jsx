@@ -12,6 +12,9 @@ import ShiftAttendanceSettings from './settings/ShiftAttendanceSettings.jsx';
 import ShiftFormSettings from './settings/ShiftFormSettings.jsx';
 import ResvFormSettings from './settings/ResvFormSettings.jsx';
 import HistoryColSettings from './settings/HistoryColSettings.jsx';
+import KarteSettings from './settings/KarteSettings.jsx';
+import LadySettings from './settings/LadySettings.jsx';
+import DisplaySettings from './settings/DisplaySettings.jsx';
 
 const KIND_ICONS = {
   course: 'yen', nomination: 'star', extension: 'yen',
@@ -22,13 +25,16 @@ const KIND_ICONS = {
 
 const MENU = [
   { id: 'personal', label: '個人設定', icon: 'user' },
+  { id: 'display',  label: '表示設定',  icon: 'note' },
   { divider: true, label: 'マスタ' },
   { id: 'stores', label: '店舗', icon: 'grid' },
   { id: 'ranks', label: 'キャストランク', icon: 'star' },
   { id: 'attendance', label: '出勤状態', icon: 'check' },
   { id: 'shift_form', label: '出勤情報フォーム', icon: 'note' },
-  { id: 'resv_form', label: '予約フォーム', icon: 'list' },
+  { id: 'resv_form', label: '予約入力', icon: 'list' },
   { id: 'history_cols', label: '利用履歴 表示項目', icon: 'history' },
+  { id: 'lady_form', label: '在籍女性フォーム', icon: 'users' },
+  { id: 'karte', label: 'レディカルテ', icon: 'note' },
   { divider: true, label: '料金 / 報酬' },
   { id: 'cast_reward', label: 'キャスト報酬', icon: 'star' },
   { id: 'reward_rates', label: 'レート設定', icon: 'yen' },
@@ -45,12 +51,15 @@ export default function Settings({ density, setDensity, pattern, setPattern }) {
 
   const renderContent = () => {
     if (active === 'personal') return <PersonalSettings density={density} setDensity={setDensity} pattern={pattern} setPattern={setPattern} />;
+    if (active === 'display') return <DisplaySettings />;
     if (active === 'stores') return <StoresSettings />;
     if (active === 'ranks') return <CastRanksSettings />;
     if (active === 'attendance') return <ShiftAttendanceSettings />;
     if (active === 'shift_form') return <ShiftFormSettings />;
     if (active === 'resv_form') return <ResvFormSettings />;
     if (active === 'history_cols') return <HistoryColSettings />;
+    if (active === 'lady_form') return <LadySettings />;
+    if (active === 'karte') return <KarteSettings />;
     if (active === 'cast_reward') return <CastRewardSettings />;
     if (active === 'reward_rates') return <RewardRateSettings />;
     if (active === 'reward_matrix') return <RewardMatrix />;

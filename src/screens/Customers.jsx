@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Icon from '../components/Icon.jsx';
 import Avatar from '../components/Avatar.jsx';
-import { useCustomers, loadCustomerReservations, saveCustomer, loadCustomerCallLogs, RESV_PAGE_SIZE } from '../hooks/useCustomers.js';
-import { useAppStore } from '../store/state.js';
+import { loadCustomerReservations, saveCustomer, loadCustomerCallLogs, RESV_PAGE_SIZE } from '../hooks/useCustomers.js';
 import { showToast } from '../lib/toast.js';
 import { formatCallTime } from '../lib/utils.js';
 import { supabase } from '../lib/supabase.js';
@@ -15,44 +14,107 @@ const RANK_CHIP = {
   VIP: 'gold', A: 'green', B: 'blue', C: '', NG: 'red',
 };
 
+const SEARCH_MODES = [
+  { value: 'phone',     label: '電話番号', placeholder: '電話番号（部分一致）' },
+  { value: 'name',      label: '名前',     placeholder: '顧客名を入力' },
+  { value: 'kana',      label: 'フリガナ', placeholder: 'フリガナを入力' },
+  { value: 'member_no', label: '会員番号', placeholder: '会員番号を入力' },
+  { value: 'address',   label: '住所',     placeholder: '住所を入力' },
+  { value: 'memo',      label: 'メモ',     placeholder: 'メモを検索（要注意・共有含む）' },
+  { value: 'all',       label: '全体検索', placeholder: 'すべての項目を横断検索' },
+];
+
+const PAGE = 50;
+
+function formatPhone(p) {
+  if (!p) return '—';
+  if (p.startsWith('+81') && p.length >= 12) return '0' + p.slice(3);
+  return p;
+}
+
+function buildSupabaseQuery(params, from) {
+  const kw = params.q.trim();
+  let q = supabase
+    .from('customers')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .range(from, from + PAGE - 1);
+
+  if (kw) {
+    switch (params.mode) {
+      case 'phone': {
+        // 国内形式（09012...）も国際形式（+8190...）も統一して末尾桁でマッチ
+        const digits = kw.replace(/\D/g, '').replace(/^81/, '').replace(/^0/, '');
+        const pat = digits || kw;
+        q = q.or(`phone_normalized.ilike.%${pat}%,phone.ilike.%${pat}%`);
+        break;
+      }
+      case 'name':      q = q.ilike('name', `%${kw}%`); break;
+      case 'kana':      q = q.ilike('kana', `%${kw}%`); break;
+      case 'member_no': q = q.ilike('member_no', `%${kw}%`); break;
+      case 'address':   q = q.ilike('address', `%${kw}%`); break;
+      case 'memo':      q = q.or(`memo.ilike.%${kw}%,alert_memo.ilike.%${kw}%,shared_memo.ilike.%${kw}%`); break;
+      case 'all':
+        q = q.or(`name.ilike.%${kw}%,kana.ilike.%${kw}%,phone_normalized.ilike.%${kw}%,phone.ilike.%${kw}%,member_no.ilike.%${kw}%,address.ilike.%${kw}%,memo.ilike.%${kw}%,alert_memo.ilike.%${kw}%`);
+        break;
+      default: break;
+    }
+  }
+
+  if (params.rank) q = q.eq('rank', params.rank);
+  return q;
+}
+
 export default function Customers() {
-  const { customers, loading, reload } = useCustomers();
-  const setAllCustomers = useAppStore((s) => s.setAllCustomers);
-  const allCustomers = useAppStore((s) => s.allCustomers);
-
-  // 画面マウント時に必ず最新データを取得（DBマイグレーション後の stale 状態を解消）
-  useEffect(() => { reload(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const [q, setQ] = useState('');
+  const [inputQ, setInputQ] = useState('');
+  const [searchMode, setSearchMode] = useState('phone');
   const [rankFilter, setRankFilter] = useState('');
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [nextOffset, setNextOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [showNewCust, setShowNewCust] = useState(false);
+  const committedRef = useRef({ q: '', mode: 'phone', rank: '' });
 
-  const filtered = customers.filter((c) => {
-    const kw = q.toLowerCase();
-    if (kw && !((c.name || '').toLowerCase().includes(kw) ||
-      (c.phone_normalized || '').includes(kw) ||
-      (c.memo || '').toLowerCase().includes(kw))) return false;
-    if (rankFilter && c.rank !== rankFilter) return false;
-    return true;
-  });
-
-  // filtered の中にいる場合だけ選択を維持。フィルタで消えたら先頭に移す。
-  const selected = filtered.find((c) => c.id === selectedId) || filtered[0] || null;
+  const doFetch = useCallback(async (params, from, append) => {
+    setLoading(true);
+    const { data } = await buildSupabaseQuery(params, from);
+    const rows = data || [];
+    if (append) {
+      setCustomers((prev) => [...prev, ...rows]);
+    } else {
+      setCustomers(rows);
+      setSelectedId(rows[0]?.id || null);
+    }
+    setNextOffset(from + rows.length);
+    setHasMore(rows.length === PAGE);
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    if (!selectedId && filtered.length > 0) { setSelectedId(filtered[0].id); return; }
-    // q / rankFilter 変更後、現在の選択が絞り込み結果に含まれなくなったらリセット
-    if (selectedId && !filtered.some((c) => c.id === selectedId)) {
-      setSelectedId(filtered[0]?.id || null);
-    }
-  }, [q, rankFilter, customers]); // eslint-disable-line react-hooks/exhaustive-deps
+    doFetch({ q: '', mode: 'phone', rank: '' }, 0, false);
+  }, [doFetch]);
+
+  const handleSearch = () => {
+    const params = { q: inputQ, mode: searchMode, rank: rankFilter };
+    committedRef.current = params;
+    doFetch(params, 0, false);
+  };
+
+  const handleRankChange = (r) => {
+    setRankFilter(r);
+    const params = { ...committedRef.current, rank: r };
+    committedRef.current = params;
+    doFetch(params, 0, false);
+  };
+
+  const selected = customers.find((c) => c.id === selectedId) || customers[0] || null;
 
   const handleSave = async (id, patch) => {
     const { data, error } = await saveCustomer(id, patch);
     if (error) { showToast('error', '保存失敗: ' + error.message); return; }
-    const updated = allCustomers.map((c) => (c.id === id ? { ...c, ...data } : c));
-    setAllCustomers(updated);
+    setCustomers((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)));
     showToast('success', '顧客情報を保存しました');
   };
 
@@ -61,17 +123,38 @@ export default function Customers() {
       <aside className="cust-list-pane">
         <div className="cust-list-head">
           <div className="search-big">
-            <Icon name="search" size={14} />
-            <input
-              placeholder="顧客名 / 電話番号"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+            <div className="search-big-row1">
+              <select
+                value={searchMode}
+                onChange={(e) => setSearchMode(e.target.value)}
+              >
+                {SEARCH_MODES.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="search-big-row2">
+              <Icon name="search" size={14} style={{ flexShrink: 0, color: 'var(--muted)' }} />
+              <input
+                placeholder={SEARCH_MODES.find((m) => m.value === searchMode)?.placeholder || ''}
+                value={inputQ}
+                onChange={(e) => setInputQ(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+              />
+            </div>
           </div>
-          <button className="btn sm ghost" title="CSV出力" onClick={() => {
+          <div className="cust-list-head-actions">
+            <button
+              onClick={handleSearch}
+              className="btn sm primary"
+              style={{ flex: 1 }}
+            >
+              <Icon name="search" size={12} />検索
+            </button>
+            <button className="btn sm ghost" title="CSV出力" onClick={() => {
             exportRowsAsCsv(
               `customers_${new Date().toISOString().slice(0, 10)}.csv`,
-              filtered,
+              customers,
               [
                 { label: '名前', key: 'name' },
                 { label: '電話', key: 'phone_normalized' },
@@ -87,28 +170,31 @@ export default function Customers() {
               ]
             );
           }}><Icon name="download" size={12} />CSV</button>
-          <button className="btn sm primary" onClick={() => setShowNewCust(true)}><Icon name="plus" size={12} />新規</button>
+            <button className="btn sm primary" onClick={() => setShowNewCust(true)}><Icon name="plus" size={12} />新規</button>
+          </div>
         </div>
         <div className="cust-filters">
           {['', 'VIP', 'A', 'B', 'C', 'NG'].map((r) => (
             <button
               key={r}
               className={'chip' + (r ? ' ' + (RANK_CHIP[r] || '') : ' blue') + (rankFilter === r ? ' active' : '')}
-              onClick={() => setRankFilter(r)}
+              onClick={() => handleRankChange(r)}
               style={{ cursor: 'pointer', border: '1px solid var(--line)' }}
             >
-              {r || `全て ${customers.length}`}
+              {r || '全て'}
             </button>
           ))}
         </div>
-        {loading ? (
+        {loading && customers.length === 0 ? (
           <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>読み込み中...</div>
         ) : (
           <div className="cust-list">
-            {filtered.map((c) => (
+            {customers.length === 0 ? (
+              <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>該当する顧客が見つかりませんでした</div>
+            ) : customers.map((c) => (
               <div
                 key={c.id}
-                className={'cl-item' + (c.id === (selected?.id) ? ' sel' : '')}
+                className={'cl-item' + (c.id === selected?.id ? ' sel' : '')}
                 onClick={() => setSelectedId(c.id)}
               >
                 <div className="cl-top">
@@ -117,7 +203,7 @@ export default function Customers() {
                     <span className={'chip ' + (RANK_CHIP[c.rank] || '')} style={{ height: 16, fontSize: 9, padding: '0 5px' }}>{c.rank}</span>
                   )}
                 </div>
-                <div className="cl-mid mono">{c.phone_normalized || '—'}</div>
+                <div className="cl-mid mono">{formatPhone(c.phone_normalized || c.phone)}</div>
                 <div className="cl-bot">
                   <span className="cl-count">利用 {c.total_visits ?? 0}回</span>
                   <span className="cl-sum mono">¥{(c.total_spent ?? 0).toLocaleString()}</span>
@@ -127,6 +213,22 @@ export default function Customers() {
                 </div>
               </div>
             ))}
+            {hasMore && (
+              <div style={{ padding: '10px 8px' }}>
+                <button
+                  onClick={() => doFetch(committedRef.current, nextOffset, true)}
+                  disabled={loading}
+                  style={{
+                    width: '100%', padding: '8px 0', fontSize: 12,
+                    border: '1px solid var(--line)', borderRadius: 6,
+                    background: 'var(--bg-subtle)', color: 'var(--muted)',
+                    cursor: loading ? 'default' : 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  {loading ? '読み込み中...' : '以降を表示する'}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </aside>
@@ -142,11 +244,50 @@ export default function Customers() {
         <NewCustomerModal
           onClose={() => setShowNewCust(false)}
           onCreated={(newC) => {
-            setAllCustomers([newC, ...allCustomers]);
+            setCustomers((prev) => [newC, ...prev]);
             setSelectedId(newC.id);
           }}
         />
       )}
+    </div>
+  );
+}
+
+function ResvSummaryPanel({ resv, customer, onEdited }) {
+  const STATUS = { reserved: '予約中', received: '受領済', working: '対応中', complete: '完了', hold: '仮予約', cancelled: 'キャンセル' };
+  const ext      = resv.selected_items?.find(s => s.kind === 'extension');
+  const nom      = resv.selected_items?.find(s => s.kind === 'nomination');
+  const opts     = resv.selected_items?.filter(s => s.kind === 'option').map(s => s.name).join(', ');
+  const transport = resv.selected_items?.find(s => s.kind === 'transport');
+  const discount  = resv.selected_items?.find(s => s.kind === 'discount');
+  const handleEdit = () => openReservationWindow({ customer, reservation: resv, onSaved: onEdited, onDeleted: onEdited });
+  const Row = ({ label, value }) => value ? (
+    <div style={{ display: 'flex', gap: 6, padding: '3px 0', borderBottom: '1px solid var(--line-2, #f0f0f0)' }}>
+      <span style={{ fontSize: 11, color: 'var(--muted)', width: 52, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 11, color: 'var(--text)', fontWeight: 500 }}>{value}</span>
+    </div>
+  ) : null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexShrink: 0 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, flex: 1 }}>{resv.reserved_date} {resv.start_time?.slice(0, 5)}</span>
+        <button className="btn sm primary" style={{ padding: '2px 10px', fontSize: 11 }} onClick={handleEdit}>編集</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+        <Row label="キャスト" value={resv.ladies?.display_name} />
+        <Row label="コース"   value={resv.course || resv.selected_items?.find(i => i.kind === 'course')?.name} />
+        <Row label="延長"     value={ext?.name} />
+        <Row label="指名"     value={nom?.name} />
+        <Row label="ホテル"   value={resv.hotel} />
+        <Row label="部屋番"   value={resv.room_no} />
+        <Row label="オプション" value={opts || undefined} />
+        <Row label="交通費"   value={transport?.name} />
+        <Row label="割引"     value={discount?.name} />
+        <Row label="合計"     value={resv.amount ? `¥${resv.amount.toLocaleString()}` : undefined} />
+        <Row label="状態"     value={STATUS[resv.status] || resv.status} />
+        <Row label="支払"     value={resv.payment_method === 'card' ? 'カード' : resv.payment_method || undefined} />
+        <Row label="メモ"     value={resv.memo || undefined} />
+      </div>
     </div>
   );
 }
@@ -168,12 +309,15 @@ function CustomerDetail({ c, onSave }) {
   const [editingCallId, setEditingCallId] = useState(null);
   const [callMemoVal,   setCallMemoVal]   = useState('');
   const [histTab,       setHistTab]       = useState('usage');
+  const [selectedResv,  setSelectedResv]  = useState(null);
   const callMemoRef = useRef(null);
+  const historyReloadRef = useRef(null);
 
   useEffect(() => {
     setHistory(null);
     setHistoryTotal(0);
     setMemoVal(c.memo || '');
+    setSelectedResv(null);
     loadCustomerReservations(c.id).then(({ data, count }) => {
       setHistory(data);
       setHistoryTotal(count);
@@ -235,7 +379,7 @@ function CustomerDetail({ c, onSave }) {
               {tags.map((t) => <span key={t} className={'chip ' + (RANK_CHIP[t] || '')}>{t}</span>)}
             </div>
             <div className="cd-meta">
-              {c.phone_normalized && <span className="mono">{c.phone_normalized}</span>}
+              {(c.phone_normalized || c.phone) && <span className="mono">{formatPhone(c.phone_normalized || c.phone)}</span>}
               {c.member_no && <><span>·</span><span>会員 {c.member_no}</span></>}
               {c.first_visit_date && <><span>·</span><span>初回 {c.first_visit_date}</span></>}
             </div>
@@ -280,7 +424,7 @@ function CustomerDetail({ c, onSave }) {
             ) : (
               <div className="cf-customer-box">
                 <div className="cf-cust-name-big">{c.name || '名前未登録'}</div>
-                <div className="cf-cust-phone-row"><Icon name="phoneIn" size={12} /><span className="mono">{c.phone_normalized || '—'}</span></div>
+                <div className="cf-cust-phone-row"><Icon name="phoneIn" size={12} /><span className="mono">{formatPhone(c.phone_normalized || c.phone)}</span></div>
                 <div className="cf-stat-grid">
                   <div><div className="cf-stat-lbl">利用</div><div className="cf-stat-val"><b>{c.total_visits ?? 0}</b>回</div></div>
                   <div><div className="cf-stat-lbl">総額</div><div className="cf-stat-val mono">¥{(c.total_spent ?? 0).toLocaleString()}</div></div>
@@ -295,36 +439,57 @@ function CustomerDetail({ c, onSave }) {
 
         <div className="cf-col">
           <div className="cf-card" style={{ height: 240, boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-            <div className="cf-card-head" style={{ flexShrink: 0 }}>
-              <Icon name="edit" size={13} />
-              <span className="cf-section-title">顧客メモ</span>
-              {editing === 'memo' ? (
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button className="btn sm primary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={saveMemo}>保存</button>
-                  <button className="btn sm" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => { setEditing(null); setMemoVal(c.memo || ''); }}>取消</button>
+            {selectedResv ? (
+              <>
+                <div className="cf-card-head" style={{ flexShrink: 0 }}>
+                  <Icon name="calendar" size={13} />
+                  <span className="cf-section-title">予約概要</span>
+                  <button className="cf-edit-btn" onClick={() => setSelectedResv(null)} title="閉じる">
+                    <Icon name="close" size={12} />
+                  </button>
                 </div>
-              ) : (
-                <button className="cf-edit-btn" onClick={() => setEditing('memo')} title="メモを編集">
-                  <Icon name="edit" size={12} />
-                </button>
-              )}
-            </div>
-            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              {editing === 'memo' ? (
-                <textarea
-                  className="cf-memo-input"
-                  style={{ height: '100%', resize: 'none', boxSizing: 'border-box' }}
-                  value={memoVal}
-                  onChange={(e) => setMemoVal(e.target.value)}
-                  placeholder="顧客メモを入力..."
-                  autoFocus
-                />
-              ) : memoVal ? (
-                <p style={{ fontSize: 12, color: 'var(--fg)', lineHeight: 1.7, margin: 0, whiteSpace: 'pre-wrap' }}>{memoVal}</p>
-              ) : (
-                <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>メモなし</div>
-              )}
-            </div>
+                <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '4px 0' }}>
+                  <ResvSummaryPanel
+                    resv={selectedResv}
+                    customer={c}
+                    onEdited={() => { setSelectedResv(null); historyReloadRef.current?.(); }}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="cf-card-head" style={{ flexShrink: 0 }}>
+                  <Icon name="edit" size={13} />
+                  <span className="cf-section-title">顧客メモ</span>
+                  {editing === 'memo' ? (
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="btn sm primary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={saveMemo}>保存</button>
+                      <button className="btn sm" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => { setEditing(null); setMemoVal(c.memo || ''); }}>取消</button>
+                    </div>
+                  ) : (
+                    <button className="cf-edit-btn" onClick={() => setEditing('memo')} title="メモを編集">
+                      <Icon name="edit" size={12} />
+                    </button>
+                  )}
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                  {editing === 'memo' ? (
+                    <textarea
+                      className="cf-memo-input"
+                      style={{ height: '100%', resize: 'none', boxSizing: 'border-box' }}
+                      value={memoVal}
+                      onChange={(e) => setMemoVal(e.target.value)}
+                      placeholder="顧客メモを入力..."
+                      autoFocus
+                    />
+                  ) : memoVal ? (
+                    <p style={{ fontSize: 12, color: 'var(--fg)', lineHeight: 1.7, margin: 0, whiteSpace: 'pre-wrap' }}>{memoVal}</p>
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>メモなし</div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -447,7 +612,7 @@ function CustomerDetail({ c, onSave }) {
         <div style={{ display: 'flex', borderBottom: '1px solid var(--line)', background: 'var(--bg-subtle)' }}>
           {[
             { key: 'usage',   label: '利用履歴', count: historyTotal || history?.length, icon: 'calendar' },
-            { key: 'calllog', label: '着信メモ',  count: callLogs?.length,  icon: 'phoneIn'  },
+            { key: 'calllog', label: '着信履歴',  count: callLogs?.length,  icon: 'phoneIn'  },
           ].map(({ key, label, count, icon }) => (
             <button
               key={key}
@@ -479,7 +644,7 @@ function CustomerDetail({ c, onSave }) {
 
         {/* タブコンテンツ */}
         {histTab === 'usage' ? (
-          <ReservationHistory customerId={c.id} history={history} totalCount={historyTotal} customer={c} />
+          <ReservationHistory customerId={c.id} history={history} totalCount={historyTotal} customer={c} onSelect={setSelectedResv} reloadRef={historyReloadRef} />
         ) : (
           <div>
             {!callLogs ? (
@@ -549,7 +714,7 @@ function CustomerDetail({ c, onSave }) {
   );
 }
 
-function ReservationHistory({ customerId, history: historyProp, totalCount, customer }) {
+function ReservationHistory({ customerId, history: historyProp, totalCount, customer, onSelect, reloadRef }) {
   const [rows,    setRows]    = useState(historyProp ?? null);
   const [total,   setTotal]   = useState(totalCount ?? 0);
   const [loading, setLoading] = useState(false);
@@ -566,10 +731,14 @@ function ReservationHistory({ customerId, history: historyProp, totalCount, cust
     });
   }, [customerId, historyProp, totalCount]);
 
-  const reload = () => loadCustomerReservations(customerId).then(({ data, count }) => {
+  const reload = useCallback(() => loadCustomerReservations(customerId).then(({ data, count }) => {
     setRows(data);
     setTotal(count);
-  });
+  }), [customerId]);
+
+  useEffect(() => {
+    if (reloadRef) reloadRef.current = reload;
+  }, [reload, reloadRef]);
 
   const loadMore = async () => {
     if (!rows || loading) return;
@@ -642,7 +811,7 @@ function ReservationHistory({ customerId, history: historyProp, totalCount, cust
             return (
               <tr
                 key={r.id}
-                onClick={() => handleEdit(r)}
+                onClick={() => onSelect ? onSelect(r) : handleEdit(r)}
                 style={{
                   background: rowBg(r.status, i),
                   cursor: 'pointer',

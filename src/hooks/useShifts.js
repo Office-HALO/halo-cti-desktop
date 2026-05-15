@@ -31,7 +31,7 @@ async function fetchShiftsData(date, storeId) {
   // シフトと予約を並列取得
   let shiftsQ = supabase
     .from('shifts')
-    .select('*, ladies!inner(display_name, name, store_code, store_id)')
+    .select('*, ladies!inner(display_name, name, store_code, store_id, notion_page_id)')
     .eq('shift_date', date)
     .order('start_time');
   if (storeId) shiftsQ = shiftsQ.eq('ladies.store_id', storeId);
@@ -39,7 +39,13 @@ async function fetchShiftsData(date, storeId) {
   // 予約は hold/ng/no_show 以外全ステータス取得（過去データのconfirmed/completed等も含む）
   let rsvQ = supabase
     .from('reservations')
-    .select('id, lady_id, start_time, end_time, status, course, customers(name)')
+    .select([
+      'id, lady_id, customer_id, store_id, start_time, end_time, duration_min, status',
+      'course, hotel, room_no, amount, fee_adjustment, payment_method',
+      'advance_cash, first_media, send_driver, receive_driver',
+      'nomination_type, memo, selected_items',
+      'customers(name, member_no, phone, address)',
+    ].join(', '))
     .eq('reserved_date', date)
     .not('status', 'in', '(hold,ng,no_show)');
   if (storeId) rsvQ = rsvQ.eq('store_id', storeId);
@@ -64,20 +70,39 @@ async function fetchShiftsData(date, storeId) {
       count: 0,
       endBadge: s.end_badge || 'agari',
       attendanceStatus: s.attendance_status || 'none',
+      attendanceMemo: s.attendance_memo || '',
       shiftId: s.id,
+      notionPageId: lady.notion_page_id || null,
     };
   });
 
   const bookingRows = (rsv || []).map((r) => ({
     id: r.id,
     cast: r.lady_id,
+    store_id: r.store_id,
     start: toHHMM(r.start_time),
     end: toHHMM(r.end_time),
+    duration_min: r.duration_min,
+    customer_id: r.customer_id || null,
     customer: r.customers?.name || '—',
+    member_no: r.customers?.member_no || '',
+    cust_phone: r.customers?.phone || '',
+    phone_last4: (r.customers?.phone || '').replace(/\D/g, '').slice(-4),
+    cust_address: r.customers?.address || '',
     status: mapRsvStatus(r.status),
     course: r.course || '',
-    type: '',
-    place: '',
+    hotel: r.hotel || '',
+    room_no: r.room_no || '',
+    amount: r.amount,
+    fee_adj: r.fee_adjustment,
+    payment: r.payment_method || '',
+    advance_cash: r.advance_cash,
+    first_media: r.first_media || '',
+    send_driver: r.send_driver || '',
+    recv_driver: r.receive_driver || '',
+    nomination: r.nomination_type || '',
+    memo: r.memo || '',
+    items: r.selected_items || [],
   }));
 
   // シフト未登録でも予約があるキャストを追加（過去データ対応）
@@ -94,7 +119,7 @@ async function fetchShiftsData(date, storeId) {
     // 予約の store_id で既に絞り込み済みなので lady の store_id は再フィルタ不要
     const { data: extraLadies } = await supabase
       .from('ladies')
-      .select('id, display_name, name, store_id')
+      .select('id, display_name, name, store_id, notion_page_id')
       .in('id', extraLadyIds);
     for (const lady of (extraLadies || [])) {
       const name = lady.display_name || lady.name || '—';
@@ -107,6 +132,7 @@ async function fetchShiftsData(date, storeId) {
         memo: '',
         hue: hashHue(name),
         pay: 0,
+        notionPageId: lady.notion_page_id || null,
         count: 0,
         endBadge: 'agari',
         attendanceStatus: 'none',

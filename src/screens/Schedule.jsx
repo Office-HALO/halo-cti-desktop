@@ -9,17 +9,17 @@ import { useShifts } from '../hooks/useShifts.js';
 import { localDateStr, formatDateJP } from '../lib/utils.js';
 import { supabase } from '../lib/supabase.js';
 import { openReservationWindow } from '../lib/reservationWindowBridge.js';
+import KarteDetailPopup from '../overlays/KarteDetailPopup.jsx';
+import BookingQuickView from '../overlays/BookingQuickView.jsx';
+import CustomerFloat from '../overlays/CustomerFloat.jsx';
+import { getGanttBodyFields, resolveBlockField } from '../lib/displaySettings.js';
+import { BOOKING_STATUS } from '../lib/bookingStatus.js';
 
 const PX_PER_MIN_BY_DENSITY = { compact: 2.2, standard: 2.8, comfort: 3.4 };
 
-const STATUS = {
-  reserved: { bg: 'oklch(0.93 0.06 245)', fg: 'oklch(0.42 0.14 245)', line: 'oklch(0.58 0.15 245)', label: '予約' },
-  received: { bg: 'oklch(0.94 0.07 150)', fg: 'oklch(0.40 0.13 150)', line: 'oklch(0.64 0.13 150)', label: '受領済' },
-  working: { bg: 'oklch(0.94 0.06 50)', fg: 'oklch(0.42 0.13 50)', line: 'oklch(0.68 0.13 50)', label: '対応中' },
-  complete: { bg: 'oklch(0.94 0.02 245)', fg: 'oklch(0.48 0.02 245)', line: 'oklch(0.72 0.02 245)', label: '完了' },
-  hold: { bg: 'oklch(0.95 0.04 15)', fg: 'oklch(0.52 0.16 15)', line: 'oklch(0.70 0.15 15)', label: '仮予約' },
-  cancelled: { bg: 'oklch(0.94 0.05 25)', fg: 'oklch(0.50 0.18 25)', line: 'oklch(0.64 0.18 25)', label: 'キャンセル' },
-};
+const STATUS = Object.fromEntries(
+  Object.entries(BOOKING_STATUS).map(([k, v]) => [k, { ...v, fg: 'var(--text)' }])
+);
 
 const CAST_STATUS = {
   active: { label: '待機中', fg: 'var(--ok)', bg: 'var(--ok-50)' },
@@ -44,12 +44,23 @@ export default function Schedule({ density = 'compact' }) {
   const HOUR_START = currentStore?.gantt_start ?? 9;
   const HOUR_END = currentStore?.gantt_end ?? 23;
   const { cast, bookings, loading, refresh } = useShifts(todayDate, currentStoreId);
+  const [ganttBodyFields] = useState(getGanttBodyFields);
+  const [attendanceStatuses, setAttendanceStatuses] = useState([]);
+
+  useEffect(() => {
+    supabase.from('shift_attendance_statuses').select('*').order('sort_order').then(({ data }) => {
+      setAttendanceStatuses(data || []);
+    });
+  }, []);
   const [hover, setHover] = useState(null);
   const [hoverX, setHoverX] = useState(null);
   const [ctxMenu, setCtxMenu] = useState(null); // { x, y, id }
   const [castCtxMenu, setCastCtxMenu] = useState(null); // { x, y, cast }
   const [shiftInfoModal, setShiftInfoModal] = useState(null); // { cast }
   const [castFilter, setCastFilter] = useState('');
+  const [selectedKarteLadyId, setSelectedKarteLadyId] = useState(null);
+  const [quickView, setQuickView] = useState(null); // { booking, castName }
+  const [customerFloat, setCustomerFloat] = useState(null); // { customerId, phone }
 
   const handleContextMenu = (e, bookingId) => {
     e.preventDefault();
@@ -112,10 +123,22 @@ export default function Schedule({ density = 'compact' }) {
   const totalCast = cast.filter((c) => c.shiftId !== null).length;
   // 対応中 = 実際に対応中ステータスのキャスト
   const workingCast = cast.filter((c) => c.status === 'working').length;
-  // 絞り込み後のキャストリスト
-  const filteredCast = castFilter
-    ? cast.filter((c) => (c.name || '').toLowerCase().includes(castFilter.toLowerCase()))
-    : cast;
+  // 絞り込み後のキャストリスト（退勤・欠勤は下部に）
+  const filteredCast = useMemo(() => {
+    const base = castFilter
+      ? cast.filter((c) => (c.name || '').toLowerCase().includes(castFilter.toLowerCase()))
+      : cast;
+    const getBehavior = (c) => {
+      const st = attendanceStatuses.find((s) => s.code === c.attendanceStatus);
+      return st?.behavior || 'none';
+    };
+    return [...base].sort((a, b) => {
+      const bA = getBehavior(a), bB = getBehavior(b);
+      const isBottomA = bA === 'returning' || bA === 'absent' || bA === 'same_day_absent' ? 1 : 0;
+      const isBottomB = bB === 'returning' || bB === 'absent' || bB === 'same_day_absent' ? 1 : 0;
+      return isBottomA - isBottomB;
+    });
+  }, [cast, castFilter, attendanceStatuses]);
 
   const shiftDate = (offset) => {
     const d = new Date(todayDate + 'T00:00:00');
@@ -165,7 +188,15 @@ export default function Schedule({ density = 'compact' }) {
         </div>
       </div>
 
-      <div className="gantt-v2">
+      <div className="gantt-v2" onClick={quickView ? () => setQuickView(null) : undefined}>
+        {quickView && (
+          <BookingQuickView
+            booking={quickView.booking}
+            castName={quickView.castName}
+            onClose={() => setQuickView(null)}
+            onEdit={() => { setQuickView(null); openBooking(quickView.booking.id); }}
+          />
+        )}
         <div className="gv2-scroll">
           {loading ? (
             <div style={{ padding: 60, textAlign: 'center', color: 'var(--muted)' }}>読み込み中...</div>
@@ -204,15 +235,22 @@ export default function Schedule({ density = 'compact' }) {
                 ))}
               </div>
 
-              {filteredCast.map((c, i) => (
+              {filteredCast.map((c, i) => {
+                const attSt = attendanceStatuses.find((s) => s.code === c.attendanceStatus);
+                const behavior = attSt?.behavior || 'none';
+                const isAbsent    = behavior === 'absent' || behavior === 'same_day_absent';
+                const isReturning = behavior === 'returning';
+                return (
                 <Fragment key={c.id}>
                   <div
                     className="gv2-side-cell"
-                    style={{ gridRow: i + 2, cursor: 'pointer' }}
-                    onClick={() => setShiftInfoModal({ cast: c })}
+                    style={{
+                      gridRow: i + 2,
+                      background: isReturning ? 'oklch(0.94 0 0)' : undefined,
+                    }}
                     onContextMenu={(e) => { e.preventDefault(); setCastCtxMenu({ x: e.clientX, y: e.clientY, cast: c }); }}
                   >
-                    <CastRow cast={c} rowH={rowH} />
+                    <CastRow cast={c} rowH={rowH} onOpenKarte={setSelectedKarteLadyId} attendanceStatuses={attendanceStatuses} isAbsent={isAbsent} onShiftClick={() => setShiftInfoModal({ cast: c })} />
                   </div>
                   <div
                     className="gv2-body-cell"
@@ -220,9 +258,15 @@ export default function Schedule({ density = 'compact' }) {
                     onMouseLeave={() => setHoverX(null)}
                     style={{
                       gridRow: i + 2,
+                      opacity: isAbsent ? 0.4 : 1,
+                      filter:  isAbsent ? 'grayscale(1)' : 'none',
                       background: (() => {
-                        const base = i % 2 === 1 ? 'oklch(0.991 0.002 245)' : '#ffffff';
-                        const shiftColor = i % 2 === 1 ? 'oklch(0.940 0.028 10)' : 'oklch(0.955 0.025 10)';
+                        const base = isReturning
+                          ? (i % 2 === 1 ? 'oklch(0.94 0 0)' : 'oklch(0.96 0 0)')
+                          : (i % 2 === 1 ? 'oklch(0.991 0.002 245)' : '#ffffff');
+                        const shiftColor = isReturning
+                          ? (i % 2 === 1 ? 'oklch(0.88 0 0)' : 'oklch(0.90 0 0)')
+                          : (i % 2 === 1 ? 'oklch(0.940 0.028 10)' : 'oklch(0.955 0.025 10)');
                         if (!c.shift) return base;
                         const m = c.shift.match(/(\d{1,2}):(\d{2}).*?(\d{1,2}):(\d{2})/);
                         if (!m) return base;
@@ -267,16 +311,29 @@ export default function Schedule({ density = 'compact' }) {
                           b={b}
                           pxPerMin={pxPerMin}
                           hourStart={HOUR_START}
+                          bodyFields={ganttBodyFields}
+                          storeName={currentStore?.name || ''}
                           onEnter={() => setHover(b.id)}
                           onLeave={() => setHover(null)}
                           hovered={hover === b.id}
-                          onClick={() => openBooking(b.id)}
+                          selected={quickView?.booking.id === b.id}
+                          onSingleClick={() => {
+                            if (quickView?.booking.id === b.id) {
+                              setQuickView(null);
+                              if (b.customer_id) setCustomerFloat({ customerId: b.customer_id, phone: b.cust_phone });
+                              else openBooking(b.id);
+                            } else {
+                              setQuickView({ booking: b, castName: c.name });
+                            }
+                          }}
+                          onDoubleClick={() => { setQuickView(null); openBooking(b.id); }}
                           onContextMenu={(e) => handleContextMenu(e, b.id)}
                         />
                       ))}
                   </div>
                 </Fragment>
-              ))}
+                );
+              })}
 
               {nowX >= 0 && (
                 <div
@@ -327,26 +384,90 @@ export default function Schedule({ density = 'compact' }) {
           onSaved={() => { closeCtxMenu(); refresh(); }}
         />
       )}
+
+      {selectedKarteLadyId && (
+        <KarteDetailPopup
+          ladyId={selectedKarteLadyId}
+          onClose={() => setSelectedKarteLadyId(null)}
+        />
+      )}
+
+      {customerFloat && (
+        <CustomerFloat
+          customerId={customerFloat.customerId}
+          phone={customerFloat.phone}
+          onClose={() => setCustomerFloat(null)}
+        />
+      )}
     </div>
   );
 }
 
-function CastRow({ cast, rowH }) {
-  const st = CAST_STATUS[cast.status] || CAST_STATUS.active;
+function CastRow({ cast, rowH, onOpenKarte, attendanceStatuses = [], isAbsent = false, onShiftClick }) {
+  const karteMap = useAppStore((s) => s.karteMap);
+  const [memoOpen, setMemoOpen] = useState(false);
+  const tagRef = useRef(null);
+
+  const attSt = attendanceStatuses.find((s) => s.code === cast.attendanceStatus);
+  const behavior = attSt?.behavior || 'none';
+  const st = behavior !== 'none' && attSt
+    ? { label: attSt.tag_label || attSt.label, fg: attSt.color, bg: attSt.color + '22' }
+    : CAST_STATUS[cast.status] || CAST_STATUS.active;
+  const showTag = behavior !== 'none';
+  const hasMemo = !!cast.attendanceMemo;
+  const dim = isAbsent ? { opacity: 0.35, filter: 'grayscale(1)' } : {};
+
+  // karte テーブルのマップから写真URLを取得（lady_id で紐付け）
+  const karteEntry = karteMap[cast.id];
+  const coverUrl = karteEntry?.photo_url || null;
+
+  const handleNameClick = (e) => {
+    if (!karteEntry) return;
+    e.stopPropagation();
+    onOpenKarte?.(cast.id);
+  };
+
   return (
     <div className="cast-row" style={{ height: rowH }}>
       <div className="cr-l">
-        <Avatar name={cast.name} size={30} hue={cast.hue} />
+        <div style={dim}>
+          <Avatar name={cast.name} size={30} hue={cast.hue} src={coverUrl || undefined} />
+        </div>
         <div className="cr-body">
           <div className="cr-top">
-            <span className="cr-name">{cast.name}</span>
-            <span className="cr-status" style={{ color: st.fg, background: st.bg }}>{st.label}</span>
+            <span
+              className="cr-name"
+              style={{ ...(karteEntry ? { cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' } : {}), ...dim }}
+              onClick={handleNameClick}
+              title={karteEntry ? 'カルテを開く' : undefined}
+            >
+              {cast.name}
+            </span>
+            {showTag && (
+              <span style={{ position: 'relative' }}>
+                <span
+                  ref={tagRef}
+                  className="cr-status"
+                  style={{ color: st.fg, background: st.bg, cursor: hasMemo ? 'pointer' : undefined }}
+                  title={hasMemo ? 'メモを開く' : undefined}
+                  onClick={hasMemo ? (e) => { e.stopPropagation(); setMemoOpen((v) => !v); } : undefined}
+                >{st.label}{hasMemo && ' 📝'}</span>
+                {memoOpen && hasMemo && (
+                  <MemoPopup memo={cast.attendanceMemo} onClose={() => setMemoOpen(false)} anchorRef={tagRef} />
+                )}
+              </span>
+            )}
           </div>
-          <div className="cr-mid">
-            <span className="cr-shift mono">{cast.shift}</span>
+          <div className="cr-mid" style={dim}>
+            <span
+              className="cr-shift mono"
+              style={{ cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+              onClick={(e) => { e.stopPropagation(); onShiftClick?.(); }}
+              title="出勤情報を編集"
+            >{cast.shift}</span>
             {cast.count > 0 && <span className="cr-count">{cast.count}本</span>}
           </div>
-          {cast.memo && <div className="cr-memo">{cast.memo}</div>}
+          {cast.memo && <div className="cr-memo" style={dim}>{cast.memo}</div>}
         </div>
       </div>
     </div>
@@ -410,19 +531,37 @@ function ShiftEndBadge({ cast, pxPerMin, hourStart, hourEnd }) {
   );
 }
 
-function BookingBlock({ b, pxPerMin, hourStart, onEnter, onLeave, hovered, onClick, onContextMenu }) {
+function BookingBlock({ b, pxPerMin, hourStart, bodyFields = [], storeName = '', onEnter, onLeave, hovered, selected, onSingleClick, onDoubleClick, onContextMenu }) {
   const s = toMin(b.start) - hourStart * 60;
   let e = toMin(b.end) - hourStart * 60;
-  if (e <= s) e += 24 * 60; // 深夜またぎ（例: 21:00-02:00）
-  const w = Math.max((e - s) * pxPerMin, 4); // 最小4px
+  if (e <= s) e += 24 * 60;
+  const w = Math.max((e - s) * pxPerMin, 4);
+  const durMin = e - s;
   const st = STATUS[b.status] || STATUS.reserved;
+  const clickTimer = useRef(null);
+
+  const visibleBody = bodyFields.filter(f => f.visible);
+
+  const handleClick = (e) => {
+    e.stopPropagation();
+    if (clickTimer.current) {
+      clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+      onDoubleClick?.();
+      return;
+    }
+    clickTimer.current = setTimeout(() => {
+      clickTimer.current = null;
+      onSingleClick?.();
+    }, 220);
+  };
 
   return (
     <div
       className="book-block"
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
-      onClick={onClick}
+      onClick={handleClick}
       onContextMenu={onContextMenu}
       style={{
         left: s * pxPerMin,
@@ -430,20 +569,83 @@ function BookingBlock({ b, pxPerMin, hourStart, onEnter, onLeave, hovered, onCli
         background: st.bg,
         borderLeft: `3px solid ${st.line}`,
         color: st.fg,
-        zIndex: hovered ? 5 : 2,
+        zIndex: selected ? 6 : hovered ? 5 : 2,
         cursor: 'pointer',
+        outline: selected ? '2px solid oklch(0.55 0.18 245)' : 'none',
+        outlineOffset: 1,
       }}
     >
-      <div className="bb-head">
-        <span className="bb-time mono">{b.start}</span>
-        {w > 80 && <span className="bb-status">{st.label}</span>}
-        {w > 40 && <span className="bb-time mono">{b.end}</span>}
+      {selected && (
+        <div style={{
+          position: 'absolute', inset: 0, borderRadius: 'inherit',
+          background: 'oklch(0.55 0.18 245 / 0.15)',
+          pointerEvents: 'none', zIndex: 1,
+        }} />
+      )}
+      {/* 行1: 時間（固定） */}
+      <div className="bb-time-row">
+        <span className="mono">{b.start}</span>
+        {w > 44 && <span className="mono">–{b.end}</span>}
+        {w > 70 && <span className="bb-duration">（{durMin}分）</span>}
       </div>
-      {w > 70 && (
+      {/* 行2: ボディ項目（設定順） */}
+      {w > 50 && visibleBody.length > 0 && (
         <div className="bb-body">
-          <span className="bb-cust">{b.customer}</span>
+          {visibleBody.map(f => {
+            if (f.key === 'status') return (
+              <span key="status" className="bb-status">{st.label}</span>
+            );
+            const val = resolveBlockField(f.key, b, storeName);
+            if (!val) return null;
+            return (
+              <span key={f.key} className={f.key === 'customer' ? 'bb-cust' : 'bb-course'}>
+                {val}
+              </span>
+            );
+          })}
         </div>
       )}
+    </div>
+  );
+}
+
+function MemoPopup({ memo, onClose, anchorRef }) {
+  const popupRef = useRef(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (anchorRef.current) {
+      const r = anchorRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.left });
+    }
+    const handler = (e) => {
+      if (popupRef.current && !popupRef.current.contains(e.target) &&
+          anchorRef.current && !anchorRef.current.contains(e.target)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={popupRef}
+      style={{
+        position: 'fixed', zIndex: 99999,
+        top: pos.top, left: pos.left,
+        minWidth: 180, maxWidth: 260,
+        background: 'var(--surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        boxShadow: '0 6px 20px rgba(0,0,0,0.15)',
+        padding: '10px 12px',
+        fontSize: 12, color: 'var(--text)',
+        whiteSpace: 'pre-wrap', lineHeight: 1.6,
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {memo}
     </div>
   );
 }

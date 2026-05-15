@@ -10,6 +10,7 @@ import { effectivePrice, rewardFor, KIND_ORDER, getRankBrand, calculateGranRewar
 import { extractRewardRates } from '../screens/settings/RewardRateSettings.jsx';
 import { loadCustomerReservations } from '../hooks/useCustomers.js';
 import { fetchMasters, getCachedMasters, setCachedMasters } from '../lib/mastersFetcher.js';
+import { useHistoryCols } from '../lib/historyCols.js';
 import '../styles.css';
 
 const STATUSES = [
@@ -54,6 +55,17 @@ function fmtDate(iso) {
   const [, mm, dd] = iso.split('-');
   return `${mm}/${dd}`;
 }
+
+const H_DOW = ['日','月','火','水','木','金','土'];
+function hFmtDate(dateStr) {
+  if (!dateStr) return '—';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dow = new Date(y, m - 1, d).getDay();
+  return `${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}(${H_DOW[dow]})`;
+}
+const H_STATUS_LABEL = { reserved: '予約中', cancelled: 'キャンセル', received: '受領済', キャンセル: 'キャンセル', 予約中: '予約中', 受領済: '受領済' };
+function hStatusBg(s)    { return s === 'cancelled' || s === 'キャンセル' ? '#fca5a5' : s === 'reserved' || s === '予約中' ? '#fde68a' : undefined; }
+function hStatusColor(s) { return s === 'cancelled' || s === 'キャンセル' ? '#991b1b' : s === 'reserved' || s === '予約中' ? '#92400e' : s === 'received' || s === '受領済' ? '#1e40af' : 'var(--muted)'; }
 
 export default function ReservationStandaloneApp({ rsvKey }) {
   const setStores = useAppStore((s) => s.setStores);
@@ -102,6 +114,26 @@ export default function ReservationStandaloneApp({ rsvKey }) {
   const [showCustSearch, setShowCustSearch] = useState(false);
   const [custSearchQ, setCustSearchQ] = useState('');
   const [custNgLadyNames, setCustNgLadyNames] = useState([]);
+
+  // ── History column resize ────────────────────────────────────────────
+  const { visibleDefs, getColWidth, setColWidth } = useHistoryCols();
+  const colResizeRef = useRef(null);
+  const startColResize = useCallback((id, e) => {
+    e.preventDefault(); e.stopPropagation();
+    colResizeRef.current = { id, startX: e.clientX, startW: getColWidth(id) };
+    function onMove(me) {
+      if (!colResizeRef.current) return;
+      const { id: rid, startX, startW } = colResizeRef.current;
+      setColWidth(rid, startW + me.clientX - startX);
+    }
+    function onUp() {
+      colResizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [getColWidth, setColWidth]);
 
   // ── History panel resize ─────────────────────────────────────────────
   const [historyHeight, setHistoryHeight] = useState(220);
@@ -829,25 +861,6 @@ export default function ReservationStandaloneApp({ rsvKey }) {
               {/* ── Col MAIN: 2-column sub-grid ── */}
               <div className="ff-col ff-col-main">
 
-                {/* 顧客検索 */}
-                <div className="ff-field">
-                  <label className="ff-label">顧客</label>
-                  <Combobox
-                    items={allCustomers.map(c => ({
-                      id: c.id,
-                      name: [c.name, c.phone_normalized].filter(Boolean).join('　'),
-                    }))}
-                    value={customer?.id ?? null}
-                    onChange={(id) => {
-                      const found = allCustomers.find(c => c.id === id) ?? null;
-                      setCustomer(found);
-                    }}
-                    placeholder="名前・電話番号で検索…"
-                    className="ff-ctrl"
-                    style={{ width: '100%' }}
-                  />
-                </div>
-
               {/* 店舗 | 新規媒体 */}
                 <div className="ff-row2">
                   <div className="ff-field">
@@ -1200,38 +1213,60 @@ export default function ReservationStandaloneApp({ rsvKey }) {
             </div>
           </div>
 
-          <div className="fw-hlist">
+          <div className="cf-hist-table-wrap" style={{ maxHeight: historyHeight - 38, overflowX: 'auto', overflowY: 'auto' }}>
             {filteredHistory.length === 0 ? (
               <div className="fw-hist-empty">履歴なし</div>
-            ) : filteredHistory.map((r, i) => {
-              const ext = r.selected_items?.find(si => si.kind === 'extension');
-              const lady = ladies.find(l => l.id === r.lady_id);
-              const statusObj = STATUSES.find(s => s.value === r.status);
-              const lhue = avatarHue(lady?.name);
-              const optCnt = r.selected_items?.filter(si => si.kind === 'option').length || 0;
-              return (
-                <div key={r.id} className={`fw-hlist-row${i % 2 ? ' alt' : ''}${r.status === 'cancelled' ? ' cancelled' : ''}`}>
-                  <span className="fw-hl-date mono">{fmtDate(r.reserved_date)}</span>
-                  <div className="fw-hl-av" style={{ '--h': lhue }}>
-                    {(lady?.display_name || lady?.name || '?')[0]}
-                  </div>
-                  <span className="fw-hl-lady">{lady?.display_name || lady?.name || '—'}</span>
-                  <span className="fw-hl-course">{r.course || '—'}</span>
-                  <span className="fw-hl-ext">{ext ? `+${ext.name}` : ''}</span>
-                  <span className="fw-hl-hotel">{r.hotel || ''}{r.room_no ? ` ${r.room_no}` : ''}</span>
-                  {optCnt > 0
-                    ? <span className="fw-hl-opt">OP {optCnt}点</span>
-                    : <span className="fw-hl-opt" />
-                  }
-                  <span className="fw-hl-spacer" />
-                  <span className={`fw-hl-pay ${r.payment_method === 'card' ? 'card' : 'cash'}`}>
-                    {r.payment_method === 'card' ? 'CARD' : 'CASH'}
-                  </span>
-                  <span className="fw-hl-amt mono">¥{r.amount?.toLocaleString() || '—'}</span>
-                  <span className={`fw-hl-stat s-${r.status}`}>{statusObj?.label || r.status}</span>
-                </div>
-              );
-            })}
+            ) : (
+              <table style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 'max-content' }}>
+                <thead>
+                  <tr>
+                    {visibleDefs.map((col) => (
+                      <th key={col.id} style={{ position: 'relative', width: getColWidth(col.id), padding: '3px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, fontWeight: 700, border: '1px solid var(--line)', background: 'var(--surface)', userSelect: 'none' }}>
+                        {col.label}
+                        <div onMouseDown={(e) => startColResize(col.id, e)} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 5, cursor: 'col-resize', zIndex: 1 }} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredHistory.map((r) => (
+                    <tr key={r.id} style={{ cursor: 'default' }}>
+                      {visibleDefs.map((col) => {
+                        const mono = ['date','start','end','phone','room_no','amount','course','extension'].includes(col.id);
+                        const tdBg = hStatusBg(r.status);
+                        let cell;
+                        switch (col.id) {
+                          case 'date':       cell = hFmtDate(r.reserved_date); break;
+                          case 'start':      cell = r.start_time?.slice(0, 5) || '—'; break;
+                          case 'end':        cell = r.end_time?.slice(0, 5) || '—'; break;
+                          case 'operator':   cell = r.operator || '—'; break;
+                          case 'phone':      cell = (cust?.phone_normalized || '').replace(/-/g, ''); break;
+                          case 'customer':   cell = cust?.name || '—'; break;
+                          case 'course':     { const v = r.course || ''; cell = v ? v.replace(/分.*$/, '') : '—'; break; }
+                          case 'lady':       cell = r.ladies?.display_name || '—'; break;
+                          case 'nomination': cell = r.nomination_type || '—'; break;
+                          case 'extension':  { const v = r.extension || ''; const m = v.match(/(\d+)/); cell = m ? m[1] : '—'; break; }
+                          case 'option':     cell = r.option_label || '—'; break;
+                          case 'discount':   cell = r.discount_amount ? '-¥' + r.discount_amount.toLocaleString() : '—'; break;
+                          case 'transport':  cell = r.transport_price ? '¥' + r.transport_price.toLocaleString() : '—'; break;
+                          case 'status': {
+                            const s = r.status || '';
+                            cell = <span style={{ color: hStatusColor(s), fontWeight: 700, fontSize: 11 }}>{H_STATUS_LABEL[s] || s || '—'}</span>;
+                            break;
+                          }
+                          case 'hotel':    cell = r.hotel || '—'; break;
+                          case 'memo':     cell = r.memo ? '●' : '—'; break;
+                          case 'room_no':  cell = r.room_no || '—'; break;
+                          case 'amount':   cell = r.amount ? '¥' + r.amount.toLocaleString() : '—'; break;
+                          default:         cell = '—';
+                        }
+                        return <td key={col.id} style={{ padding: '2px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, border: '1px solid var(--line)', ...(mono ? { fontFamily: 'monospace' } : {}), ...(tdBg ? { background: tdBg } : {}) }}>{cell}</td>;
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 

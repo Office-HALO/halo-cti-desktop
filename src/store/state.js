@@ -53,4 +53,9 @@ export const useAppStore = create((set) => ({
 
   stores: [],
   setStores: (rows) => set({ stores: rows }),
+
+  // カルテ写真マップ { [lady_id]: { id, photo_url } }
+  // 起動時に App.jsx でロード（軽量）
+  karteMap: {},
+  setKarteMap: (map) => set({ karteMap: map }),
 }));

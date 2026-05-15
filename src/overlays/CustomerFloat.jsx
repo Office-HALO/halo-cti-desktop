@@ -9,6 +9,12 @@ import { openReservationWindow } from '../lib/reservationWindowBridge.js';
 
 const RANK_CHIP = { VIP: 'gold', A: 'green', B: 'blue', NG: 'red', 優良: 'green', CB決済: 'blue' };
 
+function hashHue(str) {
+  let h = 0;
+  for (let i = 0; i < (str || '').length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
 const STATUS_LABEL = { reserved: '予約中', cancelled: 'キャンセル', received: '受領済', キャンセル: 'キャンセル', 予約中: '予約中', 受領済: '受領済' };
 function statusBg(s)    { return s === 'cancelled' || s === 'キャンセル' ? '#fca5a5' : s === 'reserved' || s === '予約中' ? '#fde68a' : undefined; }
 function statusColor(s) { return s === 'cancelled' || s === 'キャンセル' ? '#991b1b' : s === 'reserved' || s === '予約中' ? '#92400e' : s === 'received' || s === '受領済' ? '#1e40af' : 'var(--muted)'; }
@@ -19,16 +25,6 @@ function fmtDate(dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const dow = new Date(y, m - 1, d).getDay();
   return `${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}(${DOW[dow]})`;
-}
-
-function todayDateStr() {
-  const d = new Date();
-  const w = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
-  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}（${w}）`;
-}
-function todayTimeStr() {
-  const d = new Date();
-  return `${d.getHours()}時${String(d.getMinutes()).padStart(2, '0')}分`;
 }
 
 export default function CustomerFloat({ customerId, phone, onClose }) {
@@ -45,6 +41,15 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   const [showMemoAdd, setShowMemoAdd] = useState(false);
   const [newMemo, setNewMemo] = useState('');
   const [selectedRsv, setSelectedRsv] = useState(null);
+  const [ngLadies, setNgLadies] = useState([]);
+  const [editingBikou, setEditingBikou] = useState(false);
+  const [bikouDraft, setBikouDraft] = useState('');
+  const [editingCustData, setEditingCustData] = useState(false);
+  const [custForm, setCustForm] = useState({});
+  const [showNgInput, setShowNgInput] = useState(false);
+  const [ngInput, setNgInput] = useState('');
+  const [ngDropOpen, setNgDropOpen] = useState(false);
+  const [allLadies, setAllLadies] = useState([]);
   const startRef    = useRef(null);
   const resizeState = useRef(null);
 
@@ -66,26 +71,32 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   }, [getColWidth, setColWidth]);
 
   useEffect(() => {
+    supabase.from('ladies').select('id, display_name').eq('is_active', true).order('display_name')
+      .then(({ data }) => { if (data) setAllLadies(data); });
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       const { data } = await supabase.from('customers').select('*').eq('id', customerId).maybeSingle();
       if (cancelled) return;
       setC(data || null);
-      setMemoDraft(data?.shared_memo || data?.alert_memo || '');
-      const [{ data: rows }, logs] = await Promise.all([
+      setMemoDraft(data?.alert_memo || '');
+      const [{ data: rows }, logs, ngRows] = await Promise.all([
         loadCustomerReservations(customerId),
         loadCustomerCallLogs(data?.phone_normalized || phone, 10),
+        supabase.from('customer_ng_ladies').select('id, lady_name').eq('customer_id', customerId).then(({ data: d }) => d || []),
       ]);
       if (cancelled) return;
       setHistory(rows);
       setCallLogs(logs);
+      setNgLadies(ngRows);
       setLoading(false);
     })();
     return () => { cancelled = true; };
   }, [customerId]);
 
-  // call_logs のリアルタイム更新
   useEffect(() => {
     const ch = supabase
       .channel(`call_logs_float_${customerId}`)
@@ -97,7 +108,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
   }, [customerId, phone]);
 
   const onDragStart = useCallback((e) => {
-    if (e.target.closest('button')) return;
+    if (e.target.closest('button') || e.target.closest('textarea') || e.target.closest('input')) return;
     setDragging(true);
     startRef.current = { mx: e.clientX, my: e.clientY, x: pos.x, y: pos.y };
   }, [pos]);
@@ -106,18 +117,12 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
     if (!dragging) return;
     const move = (e) => {
       if (!startRef.current) return;
-      setPos({
-        x: startRef.current.x + e.clientX - startRef.current.mx,
-        y: startRef.current.y + e.clientY - startRef.current.my,
-      });
+      setPos({ x: startRef.current.x + e.clientX - startRef.current.mx, y: startRef.current.y + e.clientY - startRef.current.my });
     };
     const up = () => { setDragging(false); startRef.current = null; };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
-    return () => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-    };
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
   }, [dragging]);
 
   useEffect(() => {
@@ -126,13 +131,11 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
-  // 利用履歴エリア外クリックで選択解除
-  useEffect(() => {
-    if (!selectedRsv) return;
-    const handle = () => setSelectedRsv(null);
-    window.addEventListener('click', handle);
-    return () => window.removeEventListener('click', handle);
-  }, [selectedRsv]);
+  const reloadHistory = useCallback(async () => {
+    const { data: rows } = await loadCustomerReservations(customerId);
+    setHistory(rows);
+    setSelectedRsv(null);
+  }, [customerId]);
 
   const saveMemo = async () => {
     const { data, error } = await saveCustomer(customerId, { alert_memo: memoDraft || null });
@@ -142,11 +145,17 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
     showToast('success', 'メモを保存しました');
   };
 
+  const saveBikou = async () => {
+    await saveCustomer(customerId, { memo: bikouDraft || null });
+    setC((prev) => ({ ...prev, memo: bikouDraft }));
+    setEditingBikou(false);
+    showToast('success', '保存しました');
+  };
+
   const addMemo = async () => {
     if (!newMemo.trim()) return;
     const d = new Date();
-    const dateStr = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
-    const entry = `${dateStr} ${newMemo.trim()}`;
+    const entry = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${newMemo.trim()}`;
     const updatedMemo = c?.memo ? `${entry}\n${c.memo}` : entry;
     const { data, error } = await saveCustomer(customerId, { memo: updatedMemo });
     if (error) { showToast('error', '保存失敗'); return; }
@@ -156,22 +165,70 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
     showToast('success', 'メモを追加しました');
   };
 
+  const addNgLady = async (lady) => {
+    if (!lady) return;
+    if (ngLadies.some((r) => r.lady_name === lady.display_name)) return;
+    const { data, error } = await supabase
+      .from('customer_ng_ladies')
+      .insert({ customer_id: customerId, lady_name: lady.display_name })
+      .select('id, lady_name')
+      .single();
+    if (error) { showToast('error', `追加失敗: ${error.message}`); return; }
+    setNgLadies((prev) => [...prev, data]);
+    setNgInput('');
+    setShowNgInput(false);
+    setNgDropOpen(false);
+    showToast('success', `${lady.display_name} をNG女子に追加しました`);
+  };
+
+  const removeNgLady = async (id, name) => {
+    const { error } = await supabase.from('customer_ng_ladies').delete().eq('id', id);
+    if (error) { showToast('error', `削除失敗: ${error.message}`); return; }
+    setNgLadies((prev) => prev.filter((r) => r.id !== id));
+    showToast('success', `${name} をNG女子から削除しました`);
+  };
+
+  const openCustEdit = () => {
+    setCustForm({
+      name:       c?.name || '',
+      kana:       c?.kana || '',
+      phone:      c?.phone_normalized || c?.phone || phone || '',
+      email:      c?.email || '',
+      address:    c?.address || '',
+      line:       c?.line || '',
+      rank:       c?.rank || 'C',
+      member_no:  c?.member_no || '',
+      tags:       (c?.tags || []).join(', '),
+      alert_memo: c?.alert_memo || '',
+      ops_memo:   c?.ops_memo   || '',
+    });
+    setEditingCustData(true);
+  };
+
+  const saveCustomerData = async () => {
+    const s = (v) => (v ?? '').trim();
+    const patch = {
+      name:       s(custForm.name)      || null,
+      kana:       s(custForm.kana)      || null,
+      phone:      s(custForm.phone)     || null,
+      email:      s(custForm.email)     || null,
+      address:    s(custForm.address)   || null,
+      rank:       custForm.rank         || 'C',
+      member_no:  s(custForm.member_no) || null,
+      line:       s(custForm.line)      || null,
+      tags:       s(custForm.tags).split(',').map((t) => t.trim()).filter(Boolean),
+      alert_memo: s(custForm.alert_memo)|| null,
+      ops_memo:   s(custForm.ops_memo)  || null,
+    };
+    const { error } = await saveCustomer(customerId, patch);
+    if (error) { showToast('error', `保存失敗: ${error.message || JSON.stringify(error)}`); return; }
+    setC((prev) => ({ ...prev, ...patch }));
+    setEditingCustData(false);
+    showToast('success', '顧客データを保存しました');
+  };
+
   const tags = c?.tags || [];
-  const avg = c && (c.total_visits ?? 0) > 0
-    ? Math.round((c.total_spent || 0) / c.total_visits)
-    : 0;
-  const pastMemos = (() => {
-    if (!c?.memo) return [];
-    return c.memo
-      .split(/\n+/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const m = line.match(/^(\d{4}\/\d{1,2}\/\d{1,2}|\d{1,2}\/\d{1,2})\s+(.+)$/);
-        return m ? { date: m[1], text: m[2] } : { date: '', text: line };
-      })
-      .slice(0, 6);
-  })();
+  const hue  = hashHue(c?.name || '');
 
   return (
     <>
@@ -194,7 +251,7 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
           </div>
           <div className="cf-handle-r">
             <button className="cp-icon-btn" onClick={() => setMinimized((v) => !v)}>
-              <Icon name="chevronD" size={14} style={{ transform: minimized ? 'rotate(180deg)' : 'none' }} />
+              <Icon name="chevronD" size={14} style={{ transform: minimized ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
             </button>
             <button className="cp-icon-btn" onClick={onClose}>
               <Icon name="close" size={14} />
@@ -207,122 +264,345 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
             {loading && <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>読み込み中...</div>}
             {!loading && !c && <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>顧客情報が取得できませんでした</div>}
             {!loading && c && (
-              <div className="cf-body">
-                {/* 上段: 顧客データ ｜ 顧客メモ */}
-                <div className="cf-grid">
-                  <div className="cf-col">
-                    <div className="cf-card">
-                      <div className="cf-card-head">
-                        <Icon name="users" size={13} />
-                        <span className="cf-section-title">顧客データ</span>
-                        <button className="cf-edit-btn"><Icon name="edit" size={12} /></button>
+              <>
+                {/* 2-col banner: 顧客情報 | 顧客備考 */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: '1px solid var(--line)', height: 224, overflow: 'hidden' }}>
+
+                  {/* LEFT: 顧客情報 or 編集フォーム */}
+                  <div style={{ position: 'relative', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    <div style={{ padding: '12px 14px', paddingRight: editingCustData ? 14 : 174, display: 'flex', flexDirection: 'column', gap: 8, flex: 1, overflowY: 'auto' }}>
+                      {editingCustData ? (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                            <span style={{ fontSize: 12, fontWeight: 700 }}>顧客データ編集</span>
+                            <button className="cf-edit-btn" onClick={() => setEditingCustData(false)} title="キャンセル">
+                              <Icon name="close" size={12} />
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, overflowY: 'auto', maxHeight: 200, fontSize: 12 }}>
+                            {[
+                              { label: '名前',     key: 'name',      type: 'text' },
+                              { label: 'フリガナ', key: 'kana',      type: 'text' },
+                              { label: '電話番号', key: 'phone',     type: 'tel'  },
+                              { label: 'メール',   key: 'email',     type: 'email'},
+                              { label: '住所',     key: 'address',   type: 'text' },
+                              { label: 'LINE ID',  key: 'line',      type: 'text' },
+                              { label: '会員番号', key: 'member_no', type: 'text' },
+                              { label: 'タグ（カンマ区切り）', key: 'tags', type: 'text' },
+                            ].map(({ label, key, type }) => (
+                              <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600 }}>{label}</span>
+                                <input
+                                  type={type}
+                                  value={custForm[key] || ''}
+                                  onChange={(e) => setCustForm((f) => ({ ...f, [key]: e.target.value }))}
+                                  style={{ padding: '4px 7px', border: '1px solid var(--border)', borderRadius: 5, fontSize: 12, background: 'var(--bg)', color: 'var(--text)', fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box', width: '100%' }}
+                                />
+                              </label>
+                            ))}
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600 }}>ランク</span>
+                              <select
+                                value={custForm.rank || 'C'}
+                                onChange={(e) => setCustForm((f) => ({ ...f, rank: e.target.value }))}
+                                style={{ padding: '4px 7px', border: '1px solid var(--border)', borderRadius: 5, fontSize: 12, background: 'var(--bg)', color: 'var(--text)', fontFamily: 'inherit' }}
+                              >
+                                {['VIP','A','B','C','NG'].map((r) => <option key={r} value={r}>{r}</option>)}
+                              </select>
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600 }}>要注意事項</span>
+                              <textarea
+                                value={custForm.alert_memo || ''}
+                                onChange={(e) => setCustForm((f) => ({ ...f, alert_memo: e.target.value }))}
+                                rows={2}
+                                style={{ padding: '4px 7px', border: '1px solid var(--border)', borderRadius: 5, fontSize: 12, background: 'var(--bg)', color: 'var(--text)', fontFamily: 'inherit', outline: 'none', resize: 'none', boxSizing: 'border-box', width: '100%' }}
+                              />
+                            </label>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span style={{ fontSize: 10, color: '#b45309', fontWeight: 600 }}>オペレーション上の注意</span>
+                              <textarea
+                                value={custForm.ops_memo || ''}
+                                onChange={(e) => setCustForm((f) => ({ ...f, ops_memo: e.target.value }))}
+                                rows={2}
+                                style={{ padding: '4px 7px', border: '1px solid #fcd34d', borderRadius: 5, fontSize: 12, background: '#fffbeb', color: 'var(--text)', fontFamily: 'inherit', outline: 'none', resize: 'none', boxSizing: 'border-box', width: '100%' }}
+                              />
+                            </label>
+                          </div>
+                          <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+                            <button className="btn sm primary" onClick={saveCustomerData}>保存</button>
+                            <button className="btn sm" onClick={() => setEditingCustData(false)}>キャンセル</button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* アバター + 名前/タグ/統計 */}
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                            <div style={{
+                              width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+                              background: `linear-gradient(135deg, oklch(0.55 0.16 ${hue}), oklch(0.40 0.20 ${hue}))`,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              color: '#fff', fontWeight: 800, fontSize: 17,
+                            }}>
+                              {c.name?.[0] || '?'}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 14, fontWeight: 700 }}>{c.name || '名前未登録'}</span>
+                                <button className="cf-edit-btn" onClick={openCustEdit} title="顧客データ編集">
+                                  <Icon name="edit" size={11} />
+                                </button>
+                              </div>
+                              <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginTop: 2 }}>
+                                {tags.map((t) => <span key={t} className={'chip ' + (RANK_CHIP[t] || '')}>{t}</span>)}
+                              </div>
+                              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
+                                <span className="mono">{c.phone_normalized || phone}</span>
+                                <span style={{ margin: '0 5px' }}>·</span>
+                                <span>{c.total_visits ?? 0}回</span>
+                              </div>
+                              <div style={{ fontSize: 11, marginTop: 1 }}>
+                                総額 <b className="mono">¥{(c.total_spent ?? 0).toLocaleString()}</b>
+                                <span style={{ color: 'var(--muted)', marginLeft: 6 }}>最終 {c.last_visit_date || '—'}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 住所・メール */}
+                          {(c.address || c.email || c.line) && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: 'var(--muted)' }}>
+                              {c.address && <div><span style={{ fontWeight: 600 }}>住所 </span>{c.address}</div>}
+                              {c.email   && <div><span style={{ fontWeight: 600 }}>メール </span><span className="mono">{c.email}</span></div>}
+                              {c.line    && <div><span style={{ fontWeight: 600 }}>LINE </span>{c.line}</div>}
+                            </div>
+                          )}
+
+                          {/* 利用女子/NG女子: position absolute */}
+                          {(() => {
+                            const ladyMap = {};
+                            history.forEach((r) => {
+                              const n = r.ladies?.display_name;
+                              if (n) ladyMap[n] = (ladyMap[n] || 0) + 1;
+                            });
+                            const usedLadies = Object.entries(ladyMap).sort((a, b) => b[1] - a[1]);
+                            return (
+                              <div style={{
+                                position: 'absolute', right: 0, top: 0, bottom: 0, width: 160,
+                                borderLeft: '1px solid var(--line)',
+                                display: 'flex', flexDirection: 'column',
+                                background: 'var(--surface)',
+                              }}>
+                                {/* 利用女子 */}
+                                <div style={{ flex: 1, padding: '8px 10px', borderBottom: '1px solid var(--line)', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--muted)', letterSpacing: 0.4 }}>
+                                    利用女子 {usedLadies.length > 0 && <span style={{ fontWeight: 400 }}>({usedLadies.length})</span>}
+                                  </span>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                                    {usedLadies.length === 0 ? (
+                                      <span style={{ fontSize: 10, color: 'var(--muted)' }}>なし</span>
+                                    ) : usedLadies.map(([name, cnt]) => (
+                                      <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, padding: '2px 6px', borderRadius: 4, background: 'var(--halo-50, #f5f3ff)', border: '1px solid var(--halo-200, #ddd6fe)' }}>
+                                        <span style={{ fontWeight: 600, color: 'var(--halo-700, #6d28d9)' }}>{name}</span>
+                                        <span style={{ fontSize: 10, color: 'var(--muted)' }}>{cnt}回</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                {/* NG女子 */}
+                                <div style={{ flex: 1, padding: '8px 10px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, position: 'relative' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: '#b91c1c', letterSpacing: 0.4 }}>
+                                      NG女子 {ngLadies.length > 0 && <span style={{ fontWeight: 400 }}>({ngLadies.length})</span>}
+                                    </span>
+                                    <button
+                                      onClick={() => { setShowNgInput((v) => !v); setNgInput(''); }}
+                                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14, borderRadius: '50%', background: '#fca5a5', border: 'none', cursor: 'pointer', color: '#b91c1c', flexShrink: 0, padding: 0 }}
+                                      title="NG女子を追加"
+                                    >
+                                      <Icon name="plus" size={9} />
+                                    </button>
+                                  </div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                                    {ngLadies.length === 0 && !showNgInput && (
+                                      <span style={{ fontSize: 10, color: 'var(--muted)' }}>なし</span>
+                                    )}
+                                    {ngLadies.map((row) => (
+                                      <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, padding: '2px 4px 2px 6px', borderRadius: 4, background: '#fee2e2', border: '1px solid #fca5a5', color: '#b91c1c', fontWeight: 600 }}>
+                                        {row.lady_name}
+                                        <button onClick={() => removeNgLady(row.id, row.lady_name)} style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', cursor: 'pointer', color: '#b91c1c', padding: 0, lineHeight: 1 }}>
+                                          <Icon name="close" size={9} />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {showNgInput && (
+                                    <div style={{ position: 'relative', marginTop: 2 }}>
+                                      <input
+                                        autoFocus
+                                        value={ngInput}
+                                        onChange={(e) => { setNgInput(e.target.value); setNgDropOpen(true); }}
+                                        onFocus={() => setNgDropOpen(true)}
+                                        onBlur={() => setTimeout(() => { setNgDropOpen(false); }, 160)}
+                                        onKeyDown={(e) => { if (e.key === 'Escape') { setShowNgInput(false); setNgInput(''); } }}
+                                        placeholder="女子名で検索..."
+                                        style={{ width: '100%', boxSizing: 'border-box', fontSize: 11, padding: '4px 8px', border: '1px solid #fca5a5', borderRadius: 5, background: 'var(--bg)', color: 'var(--text)', fontFamily: 'inherit', outline: 'none' }}
+                                      />
+                                      {ngDropOpen && (() => {
+                                        const ngNames = new Set(ngLadies.map((r) => r.lady_name));
+                                        const filtered = allLadies.filter((l) =>
+                                          !ngNames.has(l.display_name) &&
+                                          (!ngInput.trim() || l.display_name.includes(ngInput.trim()))
+                                        );
+                                        return filtered.length > 0 ? (
+                                          <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, zIndex: 9999, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 6px 18px rgba(0,0,0,0.15)', maxHeight: 150, overflowY: 'auto' }}>
+                                            {filtered.map((l) => (
+                                              <div key={l.id} onMouseDown={() => addNgLady(l)}
+                                                style={{ padding: '6px 10px', fontSize: 12, cursor: 'pointer', color: 'var(--text)' }}
+                                                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--halo-50, #f5f3ff)'}
+                                                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                              >
+                                                {l.display_name}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : null;
+                                      })()}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* RIGHT: 予約概要 or 顧客備考 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', height: '100%' }}>
+                    {selectedRsv ? (() => {
+                      const rv = selectedRsv;
+                      const PAY = { cash: '現金', card: 'カード', transfer: '振込' };
+                      const NOM = { free: 'フリー', net: 'ネット指名', direct: '本指名' };
+                      const Row2 = ({ l1, v1, l2, v2 }) => (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 4px', borderBottom: '1px solid var(--line)' }}>
+                          <div style={{ display: 'flex', gap: 4, padding: '3px 6px' }}>
+                            <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0, minWidth: 36 }}>{l1}</span>
+                            <span style={{ fontSize: 11, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v1 || '—'}</span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 4, padding: '3px 6px', borderLeft: '1px solid var(--line)' }}>
+                            <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0, minWidth: 36 }}>{l2}</span>
+                            <span style={{ fontSize: 11, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v2 || '—'}</span>
+                          </div>
+                        </div>
+                      );
+                      const Row1 = ({ label, value, accent }) => (
+                        <div style={{ display: 'flex', gap: 6, padding: '3px 6px', borderBottom: '1px solid var(--line)' }}>
+                          <span style={{ fontSize: 10, color: 'var(--muted)', flexShrink: 0, minWidth: 36 }}>{label}</span>
+                          <span style={{ fontSize: 11, fontWeight: 500, color: accent, flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{value || '—'}</span>
+                        </div>
+                      );
+                      return (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', borderBottom: '1px solid var(--line)', flexShrink: 0, background: 'var(--surface)' }}>
+                            <span style={{ fontSize: 11, fontWeight: 700 }}>予約概要</span>
+                            <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                              <button className="btn sm primary" style={{ padding: '3px 10px', fontSize: 11 }}
+                                onClick={() => openReservationWindow({ customer: c, reservation: rv, onSaved: reloadHistory, onDeleted: reloadHistory })}>
+                                編集
+                              </button>
+                              <button className="cp-icon-btn" onClick={() => setSelectedRsv(null)}><Icon name="close" size={11} /></button>
+                            </div>
+                          </div>
+                          <div style={{ overflowY: 'auto', flex: 1 }}>
+                            <Row1 label="日時" value={`${fmtDate(rv.reserved_date)} ${rv.start_time?.slice(0,5) || ''}〜${rv.end_time?.slice(0,5) || ''}`} />
+                            <Row1 label="キャスト" value={rv.ladies?.display_name} />
+                            <Row2 l1="コース" v1={rv.course ? rv.course.replace(/分.*$/,'')+'分' : '—'} l2="延長" v2={rv.extension ? (rv.extension.match(/(\d+)/)?.[1]||rv.extension)+'分' : '—'} />
+                            <Row2 l1="指名" v1={NOM[rv.nomination_type] || rv.nomination_type} l2="交通費" v2={rv.transport} />
+                            <Row2 l1="ホテル" v1={rv.hotel} l2="部屋番" v2={rv.room_no} />
+                            <Row2 l1="合計" v1={rv.amount ? '¥'+rv.amount.toLocaleString() : '—'} l2="状態" v2={STATUS_LABEL[rv.status] || rv.status} />
+                            <Row2 l1="受付" v1={rv.reception_method} l2="支払" v2={PAY[rv.payment_method] || rv.payment_method} />
+                            <Row2 l1="送りD" v1={rv.send_driver} l2="迎えD" v2={rv.receive_driver} />
+                            <Row2 l1="女子状況" v1={rv.lady_status} l2="オペ" v2={rv.operator} />
+                            {rv.memo && <Row1 label="メモ" value={rv.memo} />}
+                          </div>
+                        </>
+                      );
+                    })() : (
+                      <div style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6, height: '100%', overflow: 'hidden' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>顧客備考</span>
+                          <button className="cf-edit-btn" onClick={() => { setBikouDraft(c.memo || ''); setEditingBikou((v) => !v); }} title="編集">
+                            <Icon name="edit" size={12} />
+                          </button>
+                        </div>
+                        {editingBikou ? (
+                          <>
+                            <textarea value={bikouDraft} onChange={(e) => setBikouDraft(e.target.value)} rows={4} autoFocus
+                              style={{ width: '100%', fontSize: 12, padding: '6px 8px', border: '1px solid var(--halo-400)', borderRadius: 6, background: 'var(--bg)', color: 'var(--text)', fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.6 }} />
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button className="btn sm primary" onClick={saveBikou}>保存</button>
+                              <button className="btn sm" onClick={() => setEditingBikou(false)}>キャンセル</button>
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ overflowY: 'auto', flex: 1, fontSize: 12, color: c.memo ? 'var(--text)' : 'var(--muted)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                            {c.memo || 'なし'}
+                          </div>
+                        )}
                       </div>
-                      <div className="cf-customer-box">
-                        <div className="cf-cust-name-big">{c.name || '名前未登録'}</div>
-                        <div className="cf-cust-id-row">
-                          <span>会員／{c.member_no || '—'}</span>
-                        </div>
-                        <div className="cf-cust-phone-row">
-                          <Icon name="phoneIn" size={12} />
-                          <span className="mono">{c.phone_normalized || phone}</span>
-                        </div>
-                        <div className="cf-sub-meta" style={{ marginTop: 4 }}>
-                          <span>店舗 <b>{c.store_name || '—'}</b></span>
-                          <span>種別 <b>{c.last_source || '予約'}</b></span>
-                        </div>
-                        <div className="cf-stat-grid">
-                          <div><div className="cf-stat-lbl">利用</div><div className="cf-stat-val"><b>{c.total_visits ?? 0}</b>回</div></div>
-                          <div><div className="cf-stat-lbl">総額</div><div className="cf-stat-val mono">¥{(c.total_spent ?? 0).toLocaleString()}</div></div>
-                          <div><div className="cf-stat-lbl">客単価</div><div className="cf-stat-val mono">¥{avg.toLocaleString()}</div></div>
-                          <div><div className="cf-stat-lbl">キャンセル</div><div className="cf-stat-val"><b style={{ color: (c.cancel_count ?? 0) > 2 ? 'var(--danger)' : undefined }}>{c.cancel_count ?? 0}</b>回</div></div>
-                        </div>
-                        {tags.length > 0 && (
-                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8 }}>
-                            {tags.map((t) => (
-                              <span key={t} className={'chip ' + (RANK_CHIP[t] || 'blue')}>{t}</span>
+                    )}
+                  </div>
+                </div>
+
+                {c.ops_memo && (
+                  <div className="cp-alert warn" style={{ margin: '8px 12px 0', borderRadius: 6, fontSize: 12 }}>
+                    <Icon name="bolt" size={12} />
+                    <span><b>オペレーション上の注意:</b> {c.ops_memo}</span>
+                  </div>
+                )}
+
+                {/* Body */}
+                <div className="cf-body" style={{ overflowY: 'auto', flex: 1 }}>
+                  {/* 3-col section */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10, alignItems: 'stretch' }}>
+                    {/* 着信履歴 */}
+                    <div className="cf-card" style={{ height: 152, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                      <div className="cf-card-head">
+                        <Icon name="phoneIn" size={13} />
+                        <span className="cf-section-title">着信履歴</span>
+                        {callLogs.length > 0 && <span style={{ fontSize: 10, color: 'var(--muted)' }}>{callLogs.length}件</span>}
+                      </div>
+                      <div style={{ flex: 1, overflowY: 'auto' }}>
+                        {callLogs.length === 0 ? (
+                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>着信記録なし</div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {callLogs.map((r) => (
+                              <div key={r.id} className="mono" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                                {formatCallTime(r.started_at)}
+                              </div>
                             ))}
                           </div>
                         )}
                       </div>
                     </div>
-                  </div>
 
-                  <div className="cf-col">
-                    <div className={'cf-card' + (editingMemo ? ' editing' : '')} style={{ flex: 1 }}>
-                      <div className="cf-card-head">
-                        <Icon name="edit" size={13} />
-                        <span className="cf-section-title">顧客メモ</span>
-                        <button className="cf-edit-btn" onClick={() => setShowMemoAdd((v) => !v)} title="メモを追加">
-                          <Icon name="plus" size={12} />
-                        </button>
-                      </div>
-                      {showMemoAdd && (
-                        <div style={{ marginBottom: 10 }}>
-                          <textarea
-                            className="cf-memo-input"
-                            rows={2}
-                            placeholder="会話メモを入力..."
-                            value={newMemo}
-                            onChange={(e) => setNewMemo(e.target.value)}
-                            autoFocus
-                          />
-                          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                            <button className="btn sm primary" onClick={addMemo}>追加</button>
-                            <button className="btn sm" onClick={() => { setShowMemoAdd(false); setNewMemo(''); }}>キャンセル</button>
-                          </div>
-                        </div>
-                      )}
-                      {pastMemos.length > 0 ? (
-                        <div className="cf-past-memos">
-                          {pastMemos.map((m, i) => (
-                            <div key={i} className="cf-past-memo">
-                              {m.date && <span className="cf-past-date mono">{m.date}</span>}
-                              <span className="cf-past-text">{m.text}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : !showMemoAdd && (
-                        <div style={{ fontSize: 12, color: 'var(--muted)', padding: '4px 0' }}>メモなし</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 下段: 着信履歴 ｜ 女子への連絡事項 + 要注意事項 */}
-                <div className="cf-grid" style={{ marginTop: 8 }}>
-                  <div className="cf-col">
-                    <div className="cf-card" style={{ flex: 1 }}>
-                      <div className="cf-card-head">
-                        <Icon name="phoneIn" size={13} />
-                        <span className="cf-section-title">着信メモ</span>
-                      </div>
-                      {callLogs.length === 0 ? (
-                        <div style={{ fontSize: 12, color: 'var(--muted)' }}>着信記録なし</div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {callLogs.map((r) => (
-                            <div key={r.id} style={{ display: 'flex', gap: 8, fontSize: 11, alignItems: 'center' }}>
-                              <span className="mono" style={{ color: 'var(--muted)', flexShrink: 0 }}>{formatCallTime(r.started_at)}</span>
-                              {r.duration != null && (
-                                <span style={{ color: 'var(--muted)', flexShrink: 0 }}>{r.duration}秒</span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="cf-col" style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
-                    <div className="cf-card" style={{ flex: 1 }}>
+                    {/* 女子への連絡事項 */}
+                    <div className="cf-card" style={{ height: 152, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                       <div className="cf-card-head">
                         <Icon name="bolt" size={13} />
                         <span className="cf-section-title">女子への連絡事項</span>
                         <button className="cf-edit-btn"><Icon name="edit" size={12} /></button>
                       </div>
-                      <p className="cf-lady-memo">{c.shared_memo || c.lady_memo || 'なし'}</p>
+                      <div style={{ flex: 1, overflowY: 'auto' }}>
+                        <p className="cf-lady-memo">{c.shared_memo || 'なし'}</p>
+                      </div>
                     </div>
-                    <div className={'cf-card cf-alert-card' + (editingMemo ? ' editing' : '')} style={{ flex: 1 }}>
+
+                    {/* 要注意事項 */}
+                    <div className={'cf-card cf-alert-card' + (editingMemo ? ' editing' : '')}
+                      style={{ height: editingMemo ? 'auto' : 152, minHeight: 152, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                       <div className="cf-card-head">
                         <Icon name="bolt" size={13} style={{ color: 'var(--danger)' }} />
                         <span className="cf-section-title">要注意事項</span>
@@ -332,104 +612,119 @@ export default function CustomerFloat({ customerId, phone, onClose }) {
                       </div>
                       {editingMemo ? (
                         <>
-                          <textarea
-                            className="cf-memo-input"
-                            rows={4}
-                            value={memoDraft}
-                            onChange={(e) => setMemoDraft(e.target.value)}
-                          />
+                          <textarea className="cf-memo-input" rows={4} value={memoDraft} onChange={(e) => setMemoDraft(e.target.value)} />
                           <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                             <button className="btn sm primary" onClick={saveMemo}>保存</button>
                             <button className="btn sm" onClick={() => { setEditingMemo(false); setMemoDraft(c.alert_memo || ''); }}>キャンセル</button>
                           </div>
                         </>
                       ) : (
-                        <p className="cf-alert-text">{c.alert_memo || 'なし'}</p>
+                        <div style={{ flex: 1, overflowY: 'auto' }}>
+                          <p className="cf-alert-text">{c.alert_memo || 'なし'}</p>
+                        </div>
                       )}
                     </div>
                   </div>
-                </div>
 
-                {/* History table */}
-                <div className="cf-history">
-                  <div className="cf-history-head">
-                    <Icon name="history" size={13} />
-                    <span className="cf-section-title">利用履歴</span>
-                    <span className="cf-history-count">全{history.length}件</span>
-                  </div>
-                  {history.length === 0 ? (
-                    <div style={{ padding: 30, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>利用履歴なし</div>
-                  ) : (
-                    <div className="cf-hist-table-wrap">
-                      <table style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 'max-content' }}>
-                        <thead>
-                          <tr>
-                            {visibleDefs.map((col) => (
-                              <th key={col.id} style={{ position: 'relative', width: getColWidth(col.id), padding: '3px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, fontWeight: 700, border: '1px solid var(--line)', background: 'var(--surface)', userSelect: 'none' }}>
-                                {col.label}
-                                <div onMouseDown={(e) => startColResize(col.id, e)} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 5, cursor: 'col-resize', zIndex: 1 }} />
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {history.map((r) => (
-                            <tr key={r.id} onClick={(e) => { e.stopPropagation(); setSelectedRsv(r); c && openReservationWindow({ customer: c, reservation: r, onSaved: async () => { const { data: rows } = await loadCustomerReservations(customerId); setHistory(rows); setSelectedRsv(null); }, onDeleted: async () => { const { data: rows } = await loadCustomerReservations(customerId); setHistory(rows); setSelectedRsv(null); } }); }} style={{ cursor: 'pointer' }} title="クリックで編集">
-                              {visibleDefs.map((col) => {
-                                const mono  = ['date','start','end','phone','room_no','amount','course','extension'].includes(col.id);
-                                const tdBg  = selectedRsv?.id === r.id ? '#c4b5fd' : statusBg(r.status);
-                                let cell;
-                                switch (col.id) {
-                                  case 'date':     cell = fmtDate(r.reserved_date); break;
-                                  case 'start':    cell = r.start_time?.slice(0, 5) || '—'; break;
-                                  case 'end':      cell = r.end_time?.slice(0, 5) || '—'; break;
-                                  case 'operator': cell = r.operator || '—'; break;
-                                  case 'phone':    cell = (c.phone_normalized || '').replace(/-/g, ''); break;
-                                  case 'customer': cell = c.name || '—'; break;
-                                  case 'course':   { const v = r.course || ''; cell = v ? v.replace(/分.*$/, '') : '—'; break; }
-                                  case 'lady':       cell = r.ladies?.display_name || '—'; break;
-                                  case 'nomination': cell = r.nomination_type || '—'; break;
-                                  case 'extension':  { const v = r.extension || ''; const m = v.match(/(\d+)/); cell = m ? m[1] : '—'; break; }
-                                  case 'option':     cell = r.option_label || '—'; break;
-                                  case 'discount':   cell = r.discount_amount ? '-¥' + r.discount_amount.toLocaleString() : '—'; break;
-                                  case 'transport':  cell = r.transport_price ? '¥' + r.transport_price.toLocaleString() : '—'; break;
-                                  case 'status': {
-                                    const s = r.status || '';
-                                    const label = STATUS_LABEL[s] || s || '—';
-                                    cell = <span style={{ color: statusColor(s), fontWeight: 700, fontSize: 11 }}>{label}</span>;
-                                    break;
-                                  }
-                                  case 'hotel':    cell = r.hotel || '—'; break;
-                                  case 'memo':     cell = r.memo ? '●' : '—'; break;
-                                  case 'room_no':  cell = r.room_no || '—'; break;
-                                  case 'amount':   cell = r.amount ? '¥' + r.amount.toLocaleString() : '—'; break;
-                                  default:         cell = '—';
-                                }
-                                return <td key={col.id} style={{ padding: '2px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, border: '1px solid var(--line)', ...(mono ? { fontFamily: 'monospace' } : {}), ...(tdBg ? { background: tdBg } : {}) }}>{cell}</td>;
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                  {/* 利用履歴 */}
+                  <div className="cf-history">
+                    <div className="cf-history-head">
+                      <Icon name="history" size={13} />
+                      <span className="cf-section-title">利用履歴</span>
+                      <span className="cf-history-count">全{history.length}件</span>
                     </div>
-                  )}
+                    {history.length === 0 ? (
+                      <div style={{ padding: 30, textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>利用履歴なし</div>
+                    ) : (
+                      <div className="cf-hist-table-wrap">
+                        <table style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 'max-content' }}>
+                          <thead>
+                            <tr>
+                              {visibleDefs.map((col) => (
+                                <th key={col.id} style={{ position: 'relative', width: getColWidth(col.id), padding: '3px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, fontWeight: 700, border: '1px solid var(--line)', background: 'var(--surface)', userSelect: 'none' }}>
+                                  {col.label}
+                                  <div onMouseDown={(e) => startColResize(col.id, e)} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 5, cursor: 'col-resize', zIndex: 1 }} />
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {history.map((r) => (
+                              <tr key={r.id} onClick={(e) => { e.stopPropagation(); setSelectedRsv(r); }} style={{ cursor: 'pointer' }} title="クリックで概要表示">
+                                {visibleDefs.map((col) => {
+                                  const mono  = ['date','start','end','phone','room_no','amount','course','extension'].includes(col.id);
+                                  const tdBg  = selectedRsv?.id === r.id ? '#c4b5fd' : statusBg(r.status);
+                                  let cell;
+                                  switch (col.id) {
+                                    case 'date':     cell = fmtDate(r.reserved_date); break;
+                                    case 'start':    cell = r.start_time?.slice(0, 5) || '—'; break;
+                                    case 'end':      cell = r.end_time?.slice(0, 5) || '—'; break;
+                                    case 'operator': cell = r.operator || '—'; break;
+                                    case 'phone':    cell = (c.phone_normalized || '').replace(/-/g, ''); break;
+                                    case 'customer': cell = c.name || '—'; break;
+                                    case 'course':   { const v = r.course || ''; cell = v ? v.replace(/分.*$/, '') : '—'; break; }
+                                    case 'lady':       cell = r.ladies?.display_name || '—'; break;
+                                    case 'nomination': cell = r.nomination_type || '—'; break;
+                                    case 'extension':  { const v = r.extension || ''; const m = v.match(/(\d+)/); cell = m ? m[1] : '—'; break; }
+                                    case 'option':     cell = r.option_label || '—'; break;
+                                    case 'discount':   cell = r.discount_amount ? '-¥' + r.discount_amount.toLocaleString() : '—'; break;
+                                    case 'transport':  cell = r.transport_price ? '¥' + r.transport_price.toLocaleString() : '—'; break;
+                                    case 'status': {
+                                      const s = r.status || '';
+                                      const label = STATUS_LABEL[s] || s || '—';
+                                      cell = <span style={{ color: statusColor(s), fontWeight: 700, fontSize: 11 }}>{label}</span>;
+                                      break;
+                                    }
+                                    case 'hotel':    cell = r.hotel || '—'; break;
+                                    case 'memo':     cell = r.memo ? '●' : '—'; break;
+                                    case 'room_no':  cell = r.room_no || '—'; break;
+                                    case 'amount':   cell = r.amount ? '¥' + r.amount.toLocaleString() : '—'; break;
+                                    default:         cell = '—';
+                                  }
+                                  return <td key={col.id} style={{ padding: '2px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, border: '1px solid var(--line)', ...(mono ? { fontFamily: 'monospace' } : {}), ...(tdBg ? { background: tdBg } : {}) }}>{cell}</td>;
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </>
             )}
 
             <div className="cf-actions">
-              <button className="cf-btn ghost"><Icon name="phoneIn" size={13} />発信</button>
-              <button className="cf-btn ghost" onClick={() => setShowMemoAdd(true)}><Icon name="edit" size={13} />メモ追加</button>
-              <button className="cf-btn ghost"><Icon name="history" size={13} />履歴フル表示</button>
-              <button className="cf-btn ghost" style={{ marginLeft: 'auto' }}>編集</button>
-              <button
-                className="cf-btn primary"
-                onClick={() => c && openReservationWindow({
-                  customer: c,
-                  onSaved: async () => { const { data: rows } = await loadCustomerReservations(customerId); setHistory(rows); },
-                })}
-              ><Icon name="plus" size={13} />新規予約</button>
+              <button className="cf-btn ghost" onClick={() => setShowMemoAdd((v) => !v)}>
+                <Icon name="edit" size={13} />メモ追加
+              </button>
+              {c && (
+                <button
+                  className="cf-btn primary"
+                  style={{ marginLeft: 'auto' }}
+                  onClick={() => openReservationWindow({ customer: c, onSaved: reloadHistory })}
+                >
+                  <Icon name="plus" size={13} />新規予約
+                </button>
+              )}
             </div>
+
+            {showMemoAdd && c && (
+              <div style={{ padding: '0 12px 12px' }}>
+                <textarea
+                  className="cf-memo-input"
+                  rows={2}
+                  placeholder="会話メモを入力..."
+                  value={newMemo}
+                  onChange={(e) => setNewMemo(e.target.value)}
+                  autoFocus
+                />
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button className="btn sm primary" onClick={addMemo}>追加</button>
+                  <button className="btn sm" onClick={() => { setShowMemoAdd(false); setNewMemo(''); }}>キャンセル</button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

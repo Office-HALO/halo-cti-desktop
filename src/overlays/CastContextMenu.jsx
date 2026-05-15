@@ -8,6 +8,7 @@ export default function CastContextMenu({ cast, x, y, onClose, onSaved }) {
   const currentStoreId = useAppStore((s) => s.currentStoreId);
   const [statuses, setStatuses] = useState([]);
   const [selected, setSelected] = useState(cast.attendanceStatus || 'none');
+  const [memo, setMemo] = useState(cast.attendanceMemo || '');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -33,12 +34,17 @@ export default function CastContextMenu({ cast, x, y, onClose, onSaved }) {
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
 
+  const selectedStatus = statuses.find((s) => s.code === selected);
+
   const handleSave = async () => {
     if (!cast.shiftId) return;
     setSaving(true);
     const { error } = await supabase
       .from('shifts')
-      .update({ attendance_status: selected === 'none' ? null : selected })
+      .update({
+        attendance_status: selected === 'none' ? null : selected,
+        attendance_memo: selectedStatus?.has_memo ? memo.trim() || null : null,
+      })
       .eq('id', cast.shiftId);
     setSaving(false);
     if (error) { showToast('error', '保存失敗: ' + error.message); return; }
@@ -85,7 +91,7 @@ export default function CastContextMenu({ cast, x, y, onClose, onSaved }) {
               name="attendance"
               value={st.code}
               checked={selected === st.code}
-              onChange={() => setSelected(st.code)}
+              onChange={() => { setSelected(st.code); if (!st.has_memo) setMemo(''); }}
               style={{ accentColor: st.color }}
             />
             <span style={{
@@ -96,6 +102,24 @@ export default function CastContextMenu({ cast, x, y, onClose, onSaved }) {
           </label>
         ))}
       </div>
+      {selectedStatus?.has_memo && (
+        <div style={{ padding: '8px 12px', borderTop: '1px solid var(--line-2)' }}>
+          <textarea
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
+            placeholder="メモを入力..."
+            rows={3}
+            autoFocus
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              padding: '6px 8px', fontSize: 12,
+              border: '1px solid var(--border)', borderRadius: 6,
+              background: 'var(--bg)', color: 'var(--text)',
+              fontFamily: 'inherit', resize: 'vertical', outline: 'none',
+            }}
+          />
+        </div>
+      )}
       <div style={{ padding: '8px 12px', borderTop: '1px solid var(--line-2)' }}>
         <button
           onClick={handleSave}

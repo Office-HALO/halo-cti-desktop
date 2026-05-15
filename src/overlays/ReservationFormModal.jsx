@@ -1,13 +1,12 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Icon from '../components/Icon.jsx';
-import Combobox from '../components/Combobox.jsx';
-import NewCustomerModal from './NewCustomerModal.jsx';
 import { supabase } from '../lib/supabase.js';
 import { showToast } from '../lib/toast.js';
 import { useAppStore } from '../store/state.js';
 import { effectivePrice, rewardFor, KIND_ORDER } from '../lib/pricing.js';
 import { loadCustomerReservations } from '../hooks/useCustomers.js';
 import { getCachedMasters, setCachedMasters, fetchMasters } from '../lib/mastersFetcher.js';
+import { useHistoryCols } from '../lib/historyCols.js';
 
 const STATUSES = [
   { value: 'reserved',  label: '予約' },
@@ -27,6 +26,17 @@ const NOMINATION_TYPES = [
 
 const COURSE_KIND_ORDER = ['course', 'nomination', 'extension', 'event', 'option', 'discount', 'media', 'other'];
 const AVATAR_HUES = [245, 30, 150, 300, 200, 90, 350, 180];
+
+const H_STATUS_LABEL = { reserved: '予約中', cancelled: 'キャンセル', received: '受領済', キャンセル: 'キャンセル', 予約中: '予約中', 受領済: '受領済' };
+function hStatusBg(s)    { return s === 'cancelled' || s === 'キャンセル' ? '#fca5a5' : s === 'reserved' || s === '予約中' ? '#fde68a' : undefined; }
+function hStatusColor(s) { return s === 'cancelled' || s === 'キャンセル' ? '#991b1b' : s === 'reserved' || s === '予約中' ? '#92400e' : s === 'received' || s === '受領済' ? '#1e40af' : 'var(--muted)'; }
+const H_DOW = ['日','月','火','水','木','金','土'];
+function hFmtDate(dateStr) {
+  if (!dateStr) return '—';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dow = new Date(y, m - 1, d).getDay();
+  return `${y}/${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}(${H_DOW[dow]})`;
+}
 
 const DEFAULT_FIELD_SETTINGS = {
   showContactRow:  true,
@@ -73,7 +83,6 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   const allCustomers = useAppStore((s) => s.allCustomers);
 
   const [selectedCustomer, setSelectedCustomer] = useState(customer || reservation?.customer || null);
-  const [showNewCustomerModal, setShowNewCustomerModal] = useState(false);
   const cust = selectedCustomer;
 
   const rootRef = useRef(null);
@@ -96,6 +105,24 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
   const [showSettings, setShowSettings] = useState(false);
 
   const [fieldSettings, setFieldSettings] = useState(DEFAULT_FIELD_SETTINGS);
+
+  const { visibleDefs, getColWidth, setColWidth } = useHistoryCols();
+  const startColResize = useCallback((id, e) => {
+    e.preventDefault(); e.stopPropagation();
+    resizeState.current = { id, startX: e.clientX, startW: getColWidth(id) };
+    function onMove(me) {
+      if (!resizeState.current) return;
+      const { id: rid, startX, startW } = resizeState.current;
+      setColWidth(rid, startW + me.clientX - startX);
+    }
+    function onUp() {
+      resizeState.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [getColWidth, setColWidth]);
 
   const [date,            setDate]            = useState(reservation?.reserved_date || todayISO());
   const [startTime,       setStartTime]       = useState(reservation?.start_time ? trimSec(reservation.start_time) : toHHMM(new Date(Date.now() + 30 * 60 * 1000)));
@@ -614,31 +641,6 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
               </div>
 
               <div className="rf-fr">
-                <span className="rf-lbl">顧客</span>
-                <Combobox
-                  items={allCustomers.map(c => ({
-                    id: c.id,
-                    name: [c.name, c.phone_normalized].filter(Boolean).join('　'),
-                  }))}
-                  value={selectedCustomer?.id ?? null}
-                  onChange={(id) => {
-                    const found = allCustomers.find(c => c.id === id) ?? null;
-                    setSelectedCustomer(found);
-                  }}
-                  placeholder="名前・電話番号で検索"
-                  className="rf-inp"
-                />
-                <button
-                  type="button"
-                  className="cf-btn ghost"
-                  style={{ marginLeft: 4, whiteSpace: 'nowrap', padding: '0 8px', height: 30, fontSize: 12 }}
-                  onClick={() => setShowNewCustomerModal(true)}
-                >
-                  <Icon name="plus" size={11} />新規
-                </button>
-              </div>
-
-              <div className="rf-fr">
                 <span className="rf-lbl">店舗</span>
                 {stores?.length > 0 ? (
                   <select className="rf-sel rf-flex1" value={storeId} onChange={e => setStoreId(e.target.value)}>
@@ -858,27 +860,60 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
             </div>
             <span className="rf-hist-ltv">累計 ¥{ltv.toLocaleString()}</span>
           </div>
-          <div className="rf-hlist">
+          <div className="rf-hist-table-wrap">
             {filteredHistory.length === 0 ? (
               <div className="rf-hlist-empty">履歴なし</div>
-            ) : filteredHistory.map((r, i) => {
-              const ext = r.selected_items?.find(si => si.kind === 'extension');
-              const lady = ladies.find(l => l.id === r.lady_id);
-              const statusObj = STATUSES.find(s => s.value === r.status);
-              return (
-                <div key={r.id} className={`rf-hlist-row${i % 2 ? ' alt' : ''}${r.status === 'cancelled' ? ' cancelled' : ''}`}>
-                  <span className="rf-hlist-date">{r.reserved_date?.slice(5).replace('-', '/')}</span>
-                  <span className="rf-hlist-course">{r.course || '—'}</span>
-                  <span className="rf-hlist-ext">{ext ? `+${ext.name}` : ''}</span>
-                  <span className="rf-hlist-lady">{lady?.display_name || lady?.name || '—'}</span>
-                  <span className="rf-hlist-hotel">{r.hotel || '—'}</span>
-                  <span className="rf-hlist-memo">{r.memo || ''}</span>
-                  <span className="rf-hlist-spacer" />
-                  <span className="rf-hlist-amt">¥{r.amount?.toLocaleString() || '—'}</span>
-                  <span className={`rf-hlist-stat s-${r.status}`}>{statusObj?.label || r.status}</span>
-                </div>
-              );
-            })}
+            ) : (
+              <table style={{ tableLayout: 'fixed', borderCollapse: 'collapse', minWidth: 'max-content' }}>
+                <thead>
+                  <tr>
+                    {visibleDefs.map((col) => (
+                      <th key={col.id} style={{ position: 'relative', width: getColWidth(col.id), padding: '3px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, fontWeight: 700, border: '1px solid var(--line)', background: 'var(--surface)', userSelect: 'none' }}>
+                        {col.label}
+                        <div onMouseDown={(e) => startColResize(col.id, e)} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 5, cursor: 'col-resize', zIndex: 1 }} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredHistory.map((r) => (
+                    <tr key={r.id} style={{ cursor: 'default' }}>
+                      {visibleDefs.map((col) => {
+                        const mono = ['date','start','end','phone','room_no','amount','course','extension'].includes(col.id);
+                        const tdBg = hStatusBg(r.status);
+                        let cell;
+                        switch (col.id) {
+                          case 'date':       cell = hFmtDate(r.reserved_date); break;
+                          case 'start':      cell = r.start_time?.slice(0, 5) || '—'; break;
+                          case 'end':        cell = r.end_time?.slice(0, 5) || '—'; break;
+                          case 'operator':   cell = r.operator || '—'; break;
+                          case 'phone':      cell = (cust?.phone_normalized || '').replace(/-/g, ''); break;
+                          case 'customer':   cell = cust?.name || '—'; break;
+                          case 'course':     { const v = r.course || ''; cell = v ? v.replace(/分.*$/, '') : '—'; break; }
+                          case 'lady':       cell = r.ladies?.display_name || '—'; break;
+                          case 'nomination': cell = r.nomination_type || '—'; break;
+                          case 'extension':  { const v = r.extension || ''; const m = v.match(/(\d+)/); cell = m ? m[1] : '—'; break; }
+                          case 'option':     cell = r.option_label || '—'; break;
+                          case 'discount':   cell = r.discount_amount ? '-¥' + r.discount_amount.toLocaleString() : '—'; break;
+                          case 'transport':  cell = r.transport_price ? '¥' + r.transport_price.toLocaleString() : '—'; break;
+                          case 'status': {
+                            const s = r.status || '';
+                            cell = <span style={{ color: hStatusColor(s), fontWeight: 700, fontSize: 11 }}>{H_STATUS_LABEL[s] || s || '—'}</span>;
+                            break;
+                          }
+                          case 'hotel':    cell = r.hotel || '—'; break;
+                          case 'memo':     cell = r.memo ? '●' : '—'; break;
+                          case 'room_no':  cell = r.room_no || '—'; break;
+                          case 'amount':   cell = r.amount ? '¥' + r.amount.toLocaleString() : '—'; break;
+                          default:         cell = '—';
+                        }
+                        return <td key={col.id} style={{ padding: '2px 5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, border: '1px solid var(--line)', ...(mono ? { fontFamily: 'monospace' } : {}), ...(tdBg ? { background: tdBg } : {}) }}>{cell}</td>;
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 
@@ -918,15 +953,6 @@ export default function ReservationFormModal({ customer, reservation, onClose, o
         </div>
       )}
 
-      {showNewCustomerModal && (
-        <NewCustomerModal
-          onClose={() => setShowNewCustomerModal(false)}
-          onCreated={(newCustomer) => {
-            setSelectedCustomer(newCustomer);
-            setShowNewCustomerModal(false);
-          }}
-        />
-      )}
     </>
   );
 }

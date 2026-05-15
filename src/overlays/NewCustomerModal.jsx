@@ -2,9 +2,21 @@ import { useState, useEffect } from 'react';
 import Icon from '../components/Icon.jsx';
 import { supabase } from '../lib/supabase.js';
 import { showToast } from '../lib/toast.js';
-import { normalizePhone } from '../lib/utils.js';
 
 const RANKS = ['VIP', 'A', 'B', 'C', 'NG'];
+
+function translateCustomerError(error) {
+  const msg = error?.message || '';
+  if (msg.includes('idx_customers_phone_normalized') || msg.includes('phone_normalized'))
+    return 'この電話番号はすでに登録されています';
+  if (msg.includes('unique') || msg.includes('duplicate'))
+    return 'すでに同じ情報が登録されています';
+  if (msg.includes('not-null') || msg.includes('null value'))
+    return '必須項目が入力されていません';
+  if (msg.includes('violates check constraint'))
+    return '入力値が正しくありません';
+  return '保存に失敗しました（' + msg + '）';
+}
 
 export default function NewCustomerModal({ initialPhone = '', onClose, onCreated }) {
   const [name, setName] = useState('');
@@ -30,7 +42,7 @@ export default function NewCustomerModal({ initialPhone = '', onClose, onCreated
     setLoading(true);
     const payload = {
       name: name.trim() || null,
-      phone_normalized: phone ? normalizePhone(phone) : null,
+      phone: phone.trim() || '',
       rank,
       tags: tagsStr.split(',').map((t) => t.trim()).filter(Boolean),
       member_no: memberNo.trim() || null,
@@ -42,7 +54,11 @@ export default function NewCustomerModal({ initialPhone = '', onClose, onCreated
     };
     const { data, error } = await supabase.from('customers').insert(payload).select().single();
     setLoading(false);
-    if (error) { showToast('error', '保存失敗: ' + error.message); return; }
+    if (error) {
+      const msg = translateCustomerError(error);
+      showToast('error', msg);
+      return;
+    }
     showToast('success', '顧客を登録しました');
     onCreated?.(data);
     onClose();
